@@ -12,6 +12,7 @@ A precise, lightweight GUI utility written in Python to detect, analyze, and cal
 - **Pre-Offset Support** – Independent per-file time offsets let you account for known timecode differences before running the correlation; the tool automatically adds them back into the reported total adjustment.
 - **Graceful Error Handling** – Missing FFmpeg or Python packages are detected at startup with clear, actionable dialog messages instead of cryptic tracebacks.
 - **No Console Window** – Ships as a `.pyw` file; the Win32 console handle is suppressed explicitly so the tool behaves as a pure GUI application.
+- **Built-in Console Panel** – A live log column on the right shows FFmpeg commands, extraction progress, correlation status, and results. Also hosts the one-click FFmpeg installer if FFmpeg is missing.
 
 ---
 
@@ -30,6 +31,14 @@ Install the Python packages with:
 ```
 pip install numpy scipy matplotlib
 ```
+
+Install FFmpeg (if not already present):
+
+```
+winget install --id Gyan.FFmpeg -e
+```
+
+Alternatively, the app will offer to install FFmpeg automatically via winget when it starts up — a banner with an **Install FFmpeg** button will appear in the console panel if FFmpeg is not found in PATH.
 
 ---
 

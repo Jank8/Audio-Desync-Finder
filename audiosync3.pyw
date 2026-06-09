@@ -37,6 +37,45 @@ if os.name == 'nt':
         ctypes.windll.kernel32.CloseHandle(hwnd)
 
 
+def _apply_dark_titlebar(window) -> None:
+    """
+    Ask Windows to render the title bar in dark mode for *window*.
+
+    Uses DwmSetWindowAttribute (DWMWA_USE_IMMERSIVE_DARK_MODE = 20 on
+    Windows 11 / 10 build 18985+, attribute 19 on earlier 10 builds).
+    Silently does nothing on non-Windows platforms or older builds that
+    do not support the attribute.
+
+    Must be called after the Tk window handle exists (i.e. after root.update()
+    or inside a root.after() callback).
+    """
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        value = ctypes.c_int(1)
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(value),
+            ctypes.sizeof(value),
+        )
+        if result != 0:
+            # Attribute 20 not supported (older Win10); try attribute 19
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 19
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(value),
+                ctypes.sizeof(value),
+            )
+    except Exception:
+        pass  # Non-fatal – title bar stays light on unsupported systems
+
+
 def get_startupinfo():
     """
     Return a STARTUPINFO object that hides subprocess console windows on Windows.
@@ -67,18 +106,10 @@ def show_startup_error(title, message):
 
 
 # ---------------------------------------------------------------------------
-# STARTUP DEPENDENCY CHECKS
-# Fail fast with a clear message if FFmpeg or Python packages are missing,
-# rather than crashing later with a cryptic traceback.
+# PYTHON PACKAGE DEPENDENCY CHECK
+# FFmpeg is checked later inside the GUI after startup so the user can see
+# the install progress in the built-in console panel.
 # ---------------------------------------------------------------------------
-if not shutil.which("ffmpeg"):
-    show_startup_error(
-        "Missing FFmpeg",
-        "FFmpeg was not found in PATH.\n\n"
-        "Install FFmpeg, make sure ffmpeg.exe is available from PATH, and restart this app."
-    )
-    sys.exit(1)
-
 try:
     import numpy as np
     import scipy.signal as signal
@@ -120,6 +151,203 @@ viz_data = {
 # Minimum zoom window expressed in seconds.  Prevents the chart from becoming
 # so narrow that rendering becomes meaningless or numerically unstable.
 MIN_ZOOM_SECONDS = 0.01
+
+# ---------------------------------------------------------------------------
+# CONSOLE PANEL HELPERS
+# These functions write timestamped log lines into the built-in console Text
+# widget.  They are defined here (before the GUI is created) so that
+# analyze_sync and the FFmpeg installer can both call them.
+# console_log() is safe to call from background threads via root.after().
+# ---------------------------------------------------------------------------
+
+def console_log(msg: str, tag: str = "info") -> None:
+    """
+    Append a timestamped line to the console Text widget.
+
+    Tags control colour:
+        "info"    – dim white  (default)
+        "ok"      – green
+        "warn"    – orange
+        "error"   – red
+        "cmd"     – blue/accent  (shell commands being run)
+        "bold"    – bright white
+
+    Args:
+        msg: Text to append (newline added automatically).
+        tag: Colour tag name (see above).
+    """
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    line = f"[{ts}]  {msg}\n"
+    try:
+        console_text.config(state=tk.NORMAL)
+        console_text.insert(tk.END, line, tag)
+        console_text.see(tk.END)
+        console_text.config(state=tk.DISABLED)
+    except Exception:
+        pass  # console widget not yet created – ignore
+
+
+def console_clear() -> None:
+    """Clear all text from the console panel."""
+    try:
+        console_text.config(state=tk.NORMAL)
+        console_text.delete("1.0", tk.END)
+        console_text.config(state=tk.DISABLED)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# FFMPEG INSTALL FLOW
+# Runs entirely inside the GUI after the main window is visible so the user
+# can read progress in the console panel.
+# ---------------------------------------------------------------------------
+
+ffmpeg_ready = False  # Set to True once FFmpeg is confirmed present
+
+
+def _stream_process_to_console(proc: subprocess.Popen) -> int:
+    """
+    Read stdout+stderr from *proc* line-by-line and write each line to the
+    console widget via root.after() so Tk stays responsive.
+
+    Returns the process returncode.
+    """
+    for raw in iter(proc.stdout.readline, b""):
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        if line:
+            root.after(0, console_log, line, "info")
+        root.update_idletasks()
+    proc.wait()
+    return proc.returncode
+
+
+def _do_install_ffmpeg() -> None:
+    """
+    Background-safe installer: runs winget, streams output to console,
+    then updates the UI depending on success or failure.
+    Called from a daemon thread so the Tk event loop stays alive.
+    """
+    global ffmpeg_ready
+
+    def ui(fn):
+        root.after(0, fn)
+
+    root.after(0, console_log, "Running: winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements", "cmd")
+
+    try:
+        proc = subprocess.Popen(
+            ["winget", "install", "--id", "Gyan.FFmpeg",
+             "-e", "--accept-source-agreements", "--accept-package-agreements"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            startupinfo=get_startupinfo(),
+        )
+        rc = _stream_process_to_console(proc)
+    except FileNotFoundError:
+        root.after(0, console_log, "ERROR: winget not found. Install FFmpeg manually and restart.", "error")
+        root.after(0, _set_install_failed)
+        return
+
+    if rc == 0:
+        # winget succeeded; verify ffmpeg.exe is now discoverable.
+        # winget may install to a location that requires a new PATH lookup,
+        # so we also check common default paths directly.
+        import os
+        extra_paths = [
+            r"C:\Program Files\FFmpeg\bin",
+            r"C:\ffmpeg\bin",
+        ]
+        found_path = shutil.which("ffmpeg")
+        if not found_path:
+            for ep in extra_paths:
+                candidate = os.path.join(ep, "ffmpeg.exe")
+                if os.path.isfile(candidate):
+                    found_path = candidate
+                    # Extend PATH for this process so subsequent subprocess calls work
+                    os.environ["PATH"] = ep + os.pathsep + os.environ.get("PATH", "")
+                    break
+
+        if found_path:
+            ffmpeg_ready = True
+            root.after(0, console_log, f"FFmpeg found at: {found_path}", "ok")
+            root.after(0, console_log, "✓ FFmpeg installed successfully. You can now run analysis.", "ok")
+            root.after(0, _set_install_ok)
+        else:
+            root.after(0, console_log, "winget finished but ffmpeg.exe was not found in PATH.", "warn")
+            root.after(0, console_log, "Restart the application after adding FFmpeg to PATH.", "warn")
+            root.after(0, _set_install_failed)
+    else:
+        root.after(0, console_log, f"winget exited with code {rc}. Installation may have failed.", "error")
+        root.after(0, _set_install_failed)
+
+
+def _set_install_ok() -> None:
+    """Re-enable the Analyze button and update the install button after success."""
+    btn_analyze.config(state=tk.NORMAL)
+    btn_install_ffmpeg.config(text="✓ FFmpeg ready", state=tk.DISABLED,
+                              bg="#1a4a2a", fg="#00ff88")
+
+
+def _set_install_failed() -> None:
+    """Re-enable the install button so the user can retry."""
+    btn_install_ffmpeg.config(text="⬇ Install FFmpeg (retry)", state=tk.NORMAL, bg="#7a2a1a")
+
+
+def prompt_ffmpeg_install() -> None:
+    """
+    Called once after the main window is shown.  If FFmpeg is already present,
+    logs an OK message and returns.  Otherwise, logs a warning and shows the
+    install button, waiting for the user to confirm.
+    """
+    global ffmpeg_ready
+    if shutil.which("ffmpeg"):
+        ffmpeg_ready = True
+        console_log("✓ FFmpeg found in PATH – ready.", "ok")
+        # FFmpeg present: hide the install banner entirely
+        install_bar.pack_forget()
+        return
+
+    # FFmpeg missing – reveal the install banner and disable analysis
+    console_log("⚠  FFmpeg was not found in PATH.", "warn")
+    console_log("   FFmpeg is required to extract audio from media files.", "info")
+    console_log("   Press  [ Install FFmpeg ]  to install it automatically via winget.", "info")
+    console_log("   If you prefer a manual install:", "info")
+    console_log("     winget install --id Gyan.FFmpeg -e", "cmd")
+    console_log("   or download from  https://ffmpeg.org/download.html", "info")
+    install_bar.pack(fill=tk.X, padx=10, pady=(0, 6))
+    btn_analyze.config(state=tk.DISABLED)
+
+
+def on_install_ffmpeg_click() -> None:
+    """
+    Triggered by the Install FFmpeg button.
+    Locks the button to prevent double-clicks and launches the installer thread.
+    """
+    btn_install_ffmpeg.config(state=tk.DISABLED, text="Installing…")
+    console_log("Starting FFmpeg installation via winget…", "bold")
+    import threading
+    t = threading.Thread(target=_do_install_ffmpeg, daemon=True)
+    t.start()
+
+
+def check_ffmpeg_before_analyze() -> bool:
+    """
+    Guard used at the top of analyze_sync to give a clear console message
+    if somehow analysis is triggered without FFmpeg (e.g. via keyboard).
+
+    Returns True if FFmpeg is available, False otherwise.
+    """
+    if ffmpeg_ready or shutil.which("ffmpeg"):
+        return True
+    console_log("✗ FFmpeg is not installed. Install it first.", "error")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# ZOOM / SCROLL HELPERS  (defined before GUI widgets that reference them)
+# ---------------------------------------------------------------------------
 
 def to_seconds(t_str: str) -> float:
     """
@@ -447,6 +675,9 @@ def analyze_sync() -> None:
     file1 = entry_file1.get()
     file2 = entry_file2.get()
 
+    if not check_ffmpeg_before_analyze():
+        return
+
     if not file1 or not file2:
         messagebox.showerror("Error", "Select both audio/video files!")
         return
@@ -461,6 +692,9 @@ def analyze_sync() -> None:
 
     label_status.config(text="● Extracting audio from files...", fg="#ffa500")
     root.update()
+    console_log("── Starting analysis ──────────────────────────", "bold")
+    console_log(f"File 1: {file1}", "info")
+    console_log(f"File 2: {file2}", "info")
 
     try:
         start_time = to_seconds(entry_start.get())
@@ -483,14 +717,19 @@ def analyze_sync() -> None:
                 "-t", str(duration), "-vn", "-map", "0:a:0",
                 "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", path_wav2]
 
+        console_log(f"ffmpeg  File 1  (start={start_time1:.3f}s  dur={duration}s)", "cmd")
         subprocess.run(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        check=True, startupinfo=get_startupinfo())
+        console_log("File 1 extracted OK", "ok")
+
+        console_log(f"ffmpeg  File 2  (start={start_time2:.3f}s  dur={duration}s)", "cmd")
         subprocess.run(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        check=True, startupinfo=get_startupinfo())
+        console_log("File 2 extracted OK", "ok")
 
         label_status.config(text="● Analyzing synchronization (signal correlation)...", fg="#ffa500")
         root.update()
-
+        console_log("Running cross-correlation…", "info")
         sr1, data1 = wavfile.read(path_wav1)
         sr2, data2 = wavfile.read(path_wav2)
 
@@ -587,6 +826,8 @@ def analyze_sync() -> None:
 
         label_result.config(text=res, fg=color)
         label_status.config(text="✓ Analysis completed successfully", fg="#00ff88")
+        console_log(f"Result: offset = {offset_ms} ms  (total = {total_offset_ms} ms)", "ok")
+        console_log("── Analysis complete ───────────────────────────", "bold")
 
         # Store filtered waveforms and integer lag for the visualisation layer
         viz_data['data1'] = data1_filtered
@@ -607,18 +848,27 @@ def analyze_sync() -> None:
         messagebox.showerror("Error", f"Analysis failed:\n{str(e)}")
         label_status.config(text="✗ Error occurred during analysis", fg="#ff4444")
         label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888")
+        console_log(f"✗ Analysis failed: {e}", "error")
 
 # ===========================================================================
 # GUI SETUP
-# All widget construction happens at module level after the functions are
-# defined.  Widgets that need to be referenced inside callbacks are stored in
-# variables that are accessible to the whole module (entry_file1, ref_var, …).
+# Layout: 1800 × 1020 px, three-column bottom row:
+#   Left   – waveform chart (expands)
+#   Middle – controls panel (fixed 300 px)
+#   Right  – console / log panel (fixed 340 px)
+#
+# An install-bar is packed above the console initially hidden; it becomes
+# visible when FFmpeg is not found at startup.
 # ===========================================================================
 root = tk.Tk()
 root.title("Audio Sync Finder - Precise Audio Offset Detection")
-root.geometry("1600x900")
+root.geometry("1800x950")
 root.configure(bg="#1a1a1a")
 root.resizable(False, False)
+
+# Apply dark title bar as soon as the window handle is available
+root.update()
+_apply_dark_titlebar(root)
 
 bg_main = "#1a1a1a"
 bg_panel = "#252525"
@@ -632,7 +882,9 @@ btn_hover = "#3d8bff"
 
 ref_var = tk.IntVar(value=1)
 
+# ---------------------------------------------------------------------------
 # Main container
+# ---------------------------------------------------------------------------
 main_container = tk.Frame(root, bg=bg_main)
 main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
@@ -649,7 +901,7 @@ files_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
 file1_container = tk.Frame(files_frame, bg=bg_panel)
 file1_container.pack(fill=tk.X, padx=15, pady=(12, 8))
 
-tk.Label(file1_container, text="File 1:", bg=bg_panel, fg=fg_main, 
+tk.Label(file1_container, text="File 1:", bg=bg_panel, fg=fg_main,
          font=("Segoe UI", 9, "bold"), width=6).pack(side=tk.LEFT)
 entry_file1 = tk.Entry(file1_container, bg=bg_input, fg=fg_main, insertbackground="white",
                        relief=tk.FLAT, font=("Segoe UI", 9))
@@ -725,13 +977,14 @@ entry_duration.pack(ipady=5, pady=3)
 tk.Label(duration_container, text="(30-60 rec.)", bg=bg_panel, fg="#666666",
          font=("Segoe UI", 7)).pack()
 
-# === BOTTOM ROW: Chart + Control Panel ===
+# === BOTTOM ROW: Chart | Controls | Console ===
 bottom_row = tk.Frame(main_container, bg=bg_main)
 bottom_row.pack(fill=tk.BOTH, expand=True)
 
-# CHART (LEFT)
-chart_frame = tk.LabelFrame(bottom_row, text=" 📊 Waveform Visualization ", bg=bg_panel, fg=fg_accent,
-                            font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
+# ── LEFT: Waveform chart ────────────────────────────────────────────────────
+chart_frame = tk.LabelFrame(bottom_row, text=" 📊 Waveform Visualization ", bg=bg_panel,
+                            fg=fg_accent, font=("Segoe UI", 10, "bold"),
+                            relief=tk.GROOVE, bd=2)
 chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
 
 canvas_container = tk.Frame(chart_frame, bg=bg_panel)
@@ -748,7 +1001,7 @@ scrollbar_frame = tk.Frame(chart_frame, bg=bg_panel, height=25)
 scrollbar_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 scrollbar_frame.pack_propagate(False)
 
-scrollbar = tk.Scale(scrollbar_frame, from_=0, to=100, orient=tk.HORIZONTAL, 
+scrollbar = tk.Scale(scrollbar_frame, from_=0, to=100, orient=tk.HORIZONTAL,
                      command=on_scroll, showvalue=False, bg=bg_panel, fg=fg_accent,
                      troughcolor=bg_input, highlightthickness=0, relief=tk.FLAT,
                      activebackground=fg_accent, sliderrelief=tk.FLAT, bd=0)
@@ -760,10 +1013,10 @@ viz_data['canvas'] = canvas
 viz_data['scrollbar'] = scrollbar
 viz_data['scrollbar_frame'] = scrollbar_frame
 
-# CONTROL PANEL (RIGHT)
+# ── MIDDLE: Controls panel ──────────────────────────────────────────────────
 control_panel = tk.LabelFrame(bottom_row, text=" Controls ", bg=bg_panel, fg=fg_accent,
                               font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2, width=300)
-control_panel.pack(side=tk.LEFT, fill=tk.Y)
+control_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 control_panel.pack_propagate(False)
 
 controls_inner = tk.Frame(control_panel, bg=bg_panel)
@@ -824,7 +1077,7 @@ manual_controls = tk.Frame(manual_section, bg=bg_panel)
 manual_controls.pack(fill=tk.X)
 
 entry_manual_offset = tk.Entry(manual_controls, bg=bg_input, fg=fg_main, insertbackground="white",
-                                relief=tk.FLAT, font=("Segoe UI", 10), justify=tk.CENTER)
+                               relief=tk.FLAT, font=("Segoe UI", 10), justify=tk.CENTER)
 entry_manual_offset.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 5))
 
 tk.Button(manual_controls, text="Apply", command=apply_manual_offset, bg=btn_primary, fg=fg_main,
@@ -837,7 +1090,7 @@ tk.Label(manual_section, text="(in milliseconds)", bg=bg_panel, fg="#666666",
 # SEPARATOR
 tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
 
-# TIPS SECTION (expandable)
+# TIPS SECTION
 tips_frame = tk.LabelFrame(controls_inner, text=" 💡 Tips ", bg=bg_panel, fg=fg_accent,
                            font=("Segoe UI", 9, "bold"), relief=tk.GROOVE, bd=1)
 tips_frame.pack(fill=tk.BOTH, expand=True)
@@ -846,7 +1099,77 @@ tips_text = tk.Text(tips_frame, bg=bg_panel, fg="#999999",
                     font=("Segoe UI", 7), relief=tk.FLAT, wrap=tk.WORD,
                     borderwidth=0, highlightthickness=0, cursor="arrow")
 tips_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-tips_text.insert(1.0, "SELECT clips with:\n• Clear speech/music\n• Single language\n• Sharp sounds (claps/hits)\n\nAVOID:\n• Multilingual sections\n• Background noise\n• Long pauses/silence")
+tips_text.insert(1.0,
+    "SELECT clips with:\n"
+    "• Clear speech/music\n"
+    "• Single language\n"
+    "• Sharp sounds (claps/hits)\n\n"
+    "AVOID:\n"
+    "• Multilingual sections\n"
+    "• Background noise\n"
+    "• Long pauses/silence")
 tips_text.config(state=tk.DISABLED)
+
+# ── RIGHT: Console / log panel ──────────────────────────────────────────────
+console_panel = tk.LabelFrame(bottom_row, text=" 🖥 Console ", bg=bg_panel, fg=fg_accent,
+                              font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2, width=340)
+console_panel.pack(side=tk.LEFT, fill=tk.Y)
+console_panel.pack_propagate(False)
+
+console_inner = tk.Frame(console_panel, bg=bg_panel)
+console_inner.pack(fill=tk.BOTH, expand=True, padx=8, pady=(6, 8))
+
+# FFmpeg install bar – hidden until needed (pack_forget in prompt_ffmpeg_install)
+install_bar = tk.Frame(console_inner, bg="#3a1a0a", relief=tk.FLAT)
+# (not packed yet; prompt_ffmpeg_install decides visibility)
+
+tk.Label(install_bar, text="⚠  FFmpeg not found", bg="#3a1a0a", fg="#ffaa44",
+         font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(8, 12))
+btn_install_ffmpeg = tk.Button(
+    install_bar, text="⬇ Install FFmpeg", command=on_install_ffmpeg_click,
+    bg="#c05010", fg=fg_main, relief=tk.FLAT, cursor="hand2",
+    font=("Segoe UI", 9, "bold"), activebackground="#d06020",
+    padx=10, pady=4
+)
+btn_install_ffmpeg.pack(side=tk.LEFT, pady=4)
+tk.Label(install_bar, text="(via winget)", bg="#3a1a0a", fg="#888888",
+         font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(6, 0))
+
+install_bar.pack(fill=tk.X, padx=0, pady=(0, 6))   # visible by default; hidden if ffmpeg ok
+
+# Text only – mousewheel scrolling, no scrollbar
+console_text_frame = tk.Frame(console_inner, bg="#0d0d0d")
+console_text_frame.pack(fill=tk.BOTH, expand=True)
+
+console_text = tk.Text(
+    console_text_frame,
+    bg="#0d0d0d", fg="#cccccc",
+    font=("Consolas", 8),
+    relief=tk.FLAT, wrap=tk.CHAR,
+    borderwidth=0, highlightthickness=0,
+    cursor="arrow",
+    state=tk.DISABLED,
+)
+console_text.pack(fill=tk.BOTH, expand=True)
+
+# Colour tags for console_log()
+console_text.tag_config("info",  foreground="#aaaaaa")
+console_text.tag_config("ok",    foreground="#00cc66")
+console_text.tag_config("warn",  foreground="#ffaa44")
+console_text.tag_config("error", foreground="#ff5555")
+console_text.tag_config("cmd",   foreground="#4a9eff")
+console_text.tag_config("bold",  foreground="#ffffff")
+
+# Clear button – below the text frame, never overlapping the scrollbar
+tk.Button(console_inner, text="Clear", command=console_clear,
+          bg="#333333", fg=fg_dim, relief=tk.FLAT, cursor="hand2",
+          font=("Segoe UI", 7), activebackground="#444444",
+          pady=2).pack(anchor=tk.E, pady=(4, 0))
+
+
+# ---------------------------------------------------------------------------
+# Post-startup FFmpeg check (runs after mainloop starts via `after`)
+# ---------------------------------------------------------------------------
+root.after(200, prompt_ffmpeg_install)
 
 root.mainloop()

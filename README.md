@@ -46,5 +46,4 @@ The script is tailored for **Windows** environments (`.pyw` execution hides the 
 
 ### Avoid:
 * Regions with long periods of complete silence or non-stop heavy background noise (e.g., explosions, storms).
-* Correlating completely different language dubs in dialogue-only scenes, as voice actors have vastly different
-* speech cadences.
+* Correlating completely different language dubs in dialogue-only scenes, as voice actors have vastly different speech cadences.

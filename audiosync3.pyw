@@ -3,6 +3,8 @@ import sys
 import subprocess
 import tempfile
 import shutil
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 # --- HIDE CONSOLE ---
 if os.name == 'nt':
@@ -20,16 +22,25 @@ def get_startupinfo():
         return info
     return None
 
-# --- AUTO-INSTALL FFMPEG ---
-if not shutil.which("ffmpeg"):
+def show_startup_error(title, message):
+    """Show startup failures in a dialog because .pyw apps do not expose a console."""
     try:
-        subprocess.check_call(["winget", "install", "Gyan.FFmpeg", 
-            "--accept-source-agreements", "--accept-package-agreements"], 
-            startupinfo=get_startupinfo())
-        os.environ["PATH"] += os.pathsep + r"C:\Program Files\ffmpeg\bin"
-    except: pass
+        startup_root = tk.Tk()
+        startup_root.withdraw()
+        messagebox.showerror(title, message)
+        startup_root.destroy()
+    except Exception:
+        pass
 
-# --- AUTO-INSTALL LIBRARIES ---
+# --- REQUIRED RUNTIME DEPENDENCIES ---
+if not shutil.which("ffmpeg"):
+    show_startup_error(
+        "Missing FFmpeg",
+        "FFmpeg was not found in PATH.\n\n"
+        "Install FFmpeg, make sure ffmpeg.exe is available from PATH, and restart this app."
+    )
+    sys.exit(1)
+
 try:
     import numpy as np
     import scipy.signal as signal
@@ -38,26 +49,23 @@ try:
     matplotlib.use('TkAgg')
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     from matplotlib.figure import Figure
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", 
-        "numpy", "scipy", "matplotlib"], startupinfo=get_startupinfo())
-    import numpy as np
-    import scipy.signal as signal
-    from scipy.io import wavfile
-    import matplotlib
-    matplotlib.use('TkAgg')
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.figure import Figure
-
-import tkinter as tk
-from tkinter import filedialog, messagebox
+except ImportError as e:
+    show_startup_error(
+        "Missing Python libraries",
+        "Required Python libraries are missing.\n\n"
+        f"Install them with:\n{sys.executable} -m pip install numpy scipy matplotlib\n\n"
+        f"Details: {e}"
+    )
+    sys.exit(1)
 
 # --- GLOBAL VARIABLES ---
 viz_data = {'data1': None, 'data2': None, 'sr': None, 'offset_samples': 0,
             'zoom_start': 0, 'zoom_end': None, 'canvas': None, 'fig': None, 'ax': None, 
             'scrollbar': None, 'scrollbar_frame': None, 'updating_scroll': False}
+MIN_ZOOM_SECONDS = 0.01
 
 def to_seconds(t_str):
+    """Convert seconds, MM:SS, or HH:MM:SS input into a float second value."""
     if ":" in t_str:
         parts = t_str.split(":")
         if len(parts) == 3: 
@@ -66,7 +74,25 @@ def to_seconds(t_str):
             return int(parts[0])*60 + float(parts[1])
     return float(t_str)
 
+def get_min_zoom_samples():
+    """Keep the chart zoom window large enough to avoid empty or unstable ranges."""
+    sr = viz_data['sr'] or 0
+    return max(1, int(sr * MIN_ZOOM_SECONDS))
+
+def set_zoom_window(center, desired_range):
+    """Set a centered zoom window while keeping it inside the waveform bounds."""
+    total_len = len(viz_data['data1'])
+    min_range = min(total_len, get_min_zoom_samples())
+    desired_range = max(min_range, min(total_len, int(desired_range)))
+    max_start = max(0, total_len - desired_range)
+    start = int(center - desired_range / 2)
+    start = max(0, min(max_start, start))
+    
+    viz_data['zoom_start'] = start
+    viz_data['zoom_end'] = start + desired_range
+
 def update_visualization():
+    """Redraw the filtered waveforms with File 2 shifted for visual alignment."""
     if viz_data['data1'] is None or viz_data['data2'] is None:
         return
     
@@ -90,8 +116,11 @@ def update_visualization():
     plot_data1 = data1[start:start+min_len]
     plot_data2 = data2_shifted[:min_len]
     
-    ax.plot(time1, plot_data1, color='#4a9eff', linewidth=0.8, alpha=0.7, label='File 1 (base)')
-    ax.plot(time1, plot_data2, color='#ff6b6b', linewidth=0.8, alpha=0.7, label='File 2 (offset)')
+    file1_label = 'File 1 (base)' if ref_var.get() == 1 else 'File 1 (target)'
+    file2_label = 'File 2 (target)' if ref_var.get() == 1 else 'File 2 (base)'
+    
+    ax.plot(time1, plot_data1, color='#4a9eff', linewidth=0.8, alpha=0.7, label=file1_label)
+    ax.plot(time1, plot_data2, color='#ff6b6b', linewidth=0.8, alpha=0.7, label=file2_label)
     
     ax.set_xlabel('Time (s)', color='white', fontsize=9)
     ax.set_ylabel('Amplitude', color='white', fontsize=9)
@@ -112,7 +141,10 @@ def update_scrollbar():
         return
     
     total_len = len(viz_data['data1'])
-    current_range = viz_data['zoom_end'] - viz_data['zoom_start']
+    if viz_data['zoom_end'] is None:
+        viz_data['zoom_end'] = total_len
+    min_range = min(total_len, get_min_zoom_samples())
+    current_range = min(total_len, max(min_range, viz_data['zoom_end'] - viz_data['zoom_start']))
     
     # Always show scrollbar, but update its range
     if current_range < total_len:
@@ -132,10 +164,12 @@ def on_scroll(value):
         return
     
     total_len = len(viz_data['data1'])
-    current_range = viz_data['zoom_end'] - viz_data['zoom_start']
+    min_range = min(total_len, get_min_zoom_samples())
+    current_range = min(total_len, max(min_range, viz_data['zoom_end'] - viz_data['zoom_start']))
     
     # Update zoom window position
-    viz_data['zoom_start'] = int(float(value))
+    max_start = max(0, total_len - current_range)
+    viz_data['zoom_start'] = max(0, min(max_start, int(float(value))))
     viz_data['zoom_end'] = min(total_len, viz_data['zoom_start'] + current_range)
     
     # Ensure we don't go past the end
@@ -147,8 +181,13 @@ def on_scroll(value):
 
 def apply_manual_offset():
     try:
+        if viz_data['data1'] is None or viz_data['sr'] is None:
+            messagebox.showerror("Error", "Run analysis before applying a manual offset.")
+            return
+        
         manual_ms = float(entry_manual_offset.get())
-        viz_data['offset_samples'] = int((manual_ms / 1000.0) * viz_data['sr'])
+        manual_samples = int((manual_ms / 1000.0) * viz_data['sr'])
+        viz_data['offset_samples'] = -manual_samples if ref_var.get() == 1 else manual_samples
         update_visualization()
         
         offset_ms = round(manual_ms, 2)
@@ -158,10 +197,10 @@ def apply_manual_offset():
         if offset_ms == 0:
             res, color = "✓ Files perfectly synchronized!\nOffset: 0.00 ms", "#00ff88"
         elif offset_ms > 0:
-            res = f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n→ Shift forward by {offset_ms} ms"
+            res = f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n→ Advance {target_name} by {offset_ms} ms"
             color = "#ffa500"
         else:
-            res = f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n→ Delay by {abs(offset_ms)} ms"
+            res = f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n→ Delay {target_name} by {abs(offset_ms)} ms"
             color = "#ff6b6b"
         
         label_result.config(text=res, fg=color)
@@ -171,19 +210,21 @@ def apply_manual_offset():
 def zoom_in():
     if viz_data['data1'] is None: return
     current_range = viz_data['zoom_end'] - viz_data['zoom_start']
-    new_range = int(current_range * 0.5)
+    if current_range <= get_min_zoom_samples():
+        return
+    new_range = max(get_min_zoom_samples(), int(current_range * 0.5))
     center = (viz_data['zoom_start'] + viz_data['zoom_end']) // 2
-    viz_data['zoom_start'] = max(0, center - new_range // 2)
-    viz_data['zoom_end'] = min(len(viz_data['data1']), center + new_range // 2)
+    set_zoom_window(center, new_range)
     update_visualization()
 
 def zoom_out():
     if viz_data['data1'] is None: return
     current_range = viz_data['zoom_end'] - viz_data['zoom_start']
-    new_range = int(current_range * 2)
+    if current_range >= len(viz_data['data1']):
+        return
+    new_range = min(len(viz_data['data1']), int(current_range * 2))
     center = (viz_data['zoom_start'] + viz_data['zoom_end']) // 2
-    viz_data['zoom_start'] = max(0, center - new_range // 2)
-    viz_data['zoom_end'] = min(len(viz_data['data1']), center + new_range // 2)
+    set_zoom_window(center, new_range)
     update_visualization()
 
 def reset_zoom():
@@ -242,6 +283,7 @@ def analyze_sync():
         start_time1 = start_time + preoffset1
         start_time2 = start_time + preoffset2
 
+        # Convert both sources to comparable mono WAV snippets before signal analysis.
         cmd1 = ["ffmpeg", "-y", "-ss", str(start_time1), "-i", file1, "-t", str(duration), 
                 "-vn", "-map", "0:a:0", "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", path_wav1]
         cmd2 = ["ffmpeg", "-y", "-ss", str(start_time2), "-i", file2, "-t", str(duration), 
@@ -264,12 +306,14 @@ def analyze_sync():
         data1 = data1.astype(np.float64)
         data2 = data2.astype(np.float64)
         
+        # Center and normalize both signals so correlation depends on shape, not loudness.
         data1 = data1 - np.mean(data1)
         data2 = data2 - np.mean(data2)
         
         data1 = data1 / (np.sqrt(np.mean(data1**2)) + 1e-10)
         data2 = data2 / (np.sqrt(np.mean(data2**2)) + 1e-10)
         
+        # Focus correlation on the speech/music band and reduce low-frequency rumble.
         nyquist = sr1 / 2
         low_cut = 100 / nyquist
         high_cut = min(8000 / nyquist, 0.99)
@@ -277,6 +321,7 @@ def analyze_sync():
         data1_filtered = signal.sosfilt(sos, data1)
         data2_filtered = signal.sosfilt(sos, data2)
         
+        # Correlation lag is the visual shift to apply to File 2 so it aligns with File 1.
         corr = signal.correlate(data1_filtered, data2_filtered, mode="full", method="fft")
         lags = signal.correlation_lags(len(data1_filtered), len(data2_filtered), mode="full")
         
@@ -290,17 +335,16 @@ def analyze_sync():
 
         ref_file = ref_var.get()
         target_name = "File 2" if ref_file == 1 else "File 1"
-        lag_target = lag if ref_file == 1 else -lag
+        # Positive target offset means the selected target is delayed relative to the base.
+        target_offset_samples = -lag if ref_file == 1 else lag
 
-        offset_ms = round((lag_target / sr1) * 1000, 2)
+        offset_ms = round((target_offset_samples / sr1) * 1000, 2)
         
         # Get pre-offsets
         preoffset1 = float(entry_preoffset1.get())
         preoffset2 = float(entry_preoffset2.get())
         
-        # Calculate total offset including pre-offsets
-        # If File 1 is base (ref_file == 1), then File 2 is the target
-        # Total offset = detected offset + (preoffset_target - preoffset_base)
+        # Total offset restores the part already compensated by the extraction pre-offsets.
         if ref_file == 1:
             # File 1 is base, File 2 is target
             preoffset_diff_ms = (preoffset2 - preoffset1) * 1000
@@ -308,17 +352,17 @@ def analyze_sync():
             # File 2 is base, File 1 is target
             preoffset_diff_ms = (preoffset1 - preoffset2) * 1000
         
-        total_offset_ms = round(offset_ms - preoffset_diff_ms, 2)
+        total_offset_ms = round(offset_ms + preoffset_diff_ms, 2)
         
         # Build result message
         if offset_ms == 0:
             res = "✓ Files perfectly synchronized!\nOffset: 0.00 ms"
             color = "#00ff88"
         elif offset_ms > 0:
-            res = f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n→ Shift forward by {offset_ms} ms"
+            res = f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n→ Advance {target_name} by {offset_ms} ms"
             color = "#ffa500"
         else:
-            res = f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n→ Delay by {abs(offset_ms)} ms"
+            res = f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n→ Delay {target_name} by {abs(offset_ms)} ms"
             color = "#ff6b6b"
         
         # Add pre-offset info and total offset if any are set
@@ -343,7 +387,7 @@ def analyze_sync():
         viz_data['data1'] = data1_filtered
         viz_data['data2'] = data2_filtered
         viz_data['sr'] = sr1
-        viz_data['offset_samples'] = int(lag_target)
+        viz_data['offset_samples'] = int(lag)
         viz_data['zoom_start'] = 0
         viz_data['zoom_end'] = len(data1_filtered)
         

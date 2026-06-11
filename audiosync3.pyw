@@ -558,12 +558,12 @@ def apply_manual_offset() -> None:
         if offset_ms == 0:
             res, color = "✓ Files perfectly synchronized!\nOffset: 0.00 ms", "#00ff88"
         elif offset_ms > 0:
-            res = (f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n"
-                   f"→ Advance {target_name} by {offset_ms} ms")
+            res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
+                   f"→ To sync {target_name}: set offset to -{offset_ms} ms")
             color = "#ffa500"
         else:
-            res = (f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n"
-                   f"→ Delay {target_name} by {abs(offset_ms)} ms")
+            res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
+                   f"→ To sync {target_name}: set offset to +{abs(offset_ms)} ms")
             color = "#ff6b6b"
 
         label_result.config(text=res, fg=color)
@@ -795,17 +795,16 @@ def analyze_sync() -> None:
 
         total_offset_ms = round(offset_ms + preoffset_diff_ms, 2)
 
-        # Build the human-readable result string
         if offset_ms == 0:
             res = "✓ Files perfectly synchronized!\nOffset: 0.00 ms"
             color = "#00ff88"
         elif offset_ms > 0:
-            res = (f"⏱️ {target_name} IS DELAYED\nOffset: +{offset_ms} ms\n"
-                   f"→ Advance {target_name} by {offset_ms} ms")
+            res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
+                   f"→ To sync {target_name}: set offset to -{offset_ms} ms")
             color = "#ffa500"
         else:
-            res = (f"⏱️ {target_name} IS AHEAD\nOffset: {offset_ms} ms\n"
-                   f"→ Delay {target_name} by {abs(offset_ms)} ms")
+            res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
+                   f"→ To sync {target_name}: set offset to +{abs(offset_ms)} ms")
             color = "#ff6b6b"
 
         # Append pre-offset summary and total offset when pre-offsets were used

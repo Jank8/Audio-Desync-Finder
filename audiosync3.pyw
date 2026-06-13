@@ -23,6 +23,7 @@ import tempfile
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import ttk
 
 # ---------------------------------------------------------------------------
 # HIDE CONSOLE WINDOW
@@ -74,6 +75,22 @@ def _apply_dark_titlebar(window) -> None:
             )
     except Exception:
         pass  # Non-fatal – title bar stays light on unsupported systems
+
+
+def _run_ffmpeg(cmd: list, **kwargs) -> subprocess.CompletedProcess:
+    """Run an ffmpeg command, registering it so it can be killed on exit."""
+    proc = subprocess.Popen(cmd, **kwargs)
+    _ffmpeg_procs.append(proc)
+    try:
+        proc.wait()
+    finally:
+        try:
+            _ffmpeg_procs.remove(proc)
+        except ValueError:
+            pass
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    return subprocess.CompletedProcess(cmd, proc.returncode)
 
 
 def get_startupinfo():
@@ -154,48 +171,37 @@ MIN_ZOOM_SECONDS = 0.01
 
 # ---------------------------------------------------------------------------
 # CONSOLE PANEL HELPERS
-# These functions write timestamped log lines into the built-in console Text
-# widget.  They are defined here (before the GUI is created) so that
-# analyze_sync and the FFmpeg installer can both call them.
-# console_log() is safe to call from background threads via root.after().
+# _console_widgets holds every Text widget that should receive log output.
+# Widgets are appended after creation; console_log() writes to all of them.
 # ---------------------------------------------------------------------------
 
+_console_widgets: list = []  # populated after GUI widgets are created
+
+
 def console_log(msg: str, tag: str = "info") -> None:
-    """
-    Append a timestamped line to the console Text widget.
-
-    Tags control colour:
-        "info"    – dim white  (default)
-        "ok"      – green
-        "warn"    – orange
-        "error"   – red
-        "cmd"     – blue/accent  (shell commands being run)
-        "bold"    – bright white
-
-    Args:
-        msg: Text to append (newline added automatically).
-        tag: Colour tag name (see above).
-    """
+    """Append a timestamped line to every registered console Text widget."""
     import datetime
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     line = f"[{ts}]  {msg}\n"
-    try:
-        console_text.config(state=tk.NORMAL)
-        console_text.insert(tk.END, line, tag)
-        console_text.see(tk.END)
-        console_text.config(state=tk.DISABLED)
-    except Exception:
-        pass  # console widget not yet created – ignore
+    for w in _console_widgets:
+        try:
+            w.config(state=tk.NORMAL)
+            w.insert(tk.END, line, tag)
+            w.see(tk.END)
+            w.config(state=tk.DISABLED)
+        except Exception:
+            pass
 
 
 def console_clear() -> None:
-    """Clear all text from the console panel."""
-    try:
-        console_text.config(state=tk.NORMAL)
-        console_text.delete("1.0", tk.END)
-        console_text.config(state=tk.DISABLED)
-    except Exception:
-        pass
+    """Clear all registered console Text widgets."""
+    for w in _console_widgets:
+        try:
+            w.config(state=tk.NORMAL)
+            w.delete("1.0", tk.END)
+            w.config(state=tk.DISABLED)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +210,24 @@ def console_clear() -> None:
 # can read progress in the console panel.
 # ---------------------------------------------------------------------------
 
-ffmpeg_ready = False  # Set to True once FFmpeg is confirmed present
+ffmpeg_ready    = False  # Set to True once FFmpeg is confirmed present
+_ffmpeg_procs: list = []  # All running ffmpeg subprocesses
+
+
+def _kill_ffmpeg() -> None:
+    """Kill all tracked ffmpeg processes. Called on window close."""
+    for proc in list(_ffmpeg_procs):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    _ffmpeg_procs.clear()
+
+
+def _on_close() -> None:
+    """Window close handler – kill ffmpeg then destroy."""
+    _kill_ffmpeg()
+    root.destroy()
 
 
 def _stream_process_to_console(proc: subprocess.Popen) -> int:
@@ -346,8 +369,141 @@ def check_ffmpeg_before_analyze() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# DRIFT FIX  –  measure progressive desync and export a corrected audio file
+# ---------------------------------------------------------------------------
+
+# Stores the two offset measurements made on the Drift Fix tab.
+# Each entry: {'time_s': float, 'offset_ms': float} or None
+drift_points: list = [None, None]
+
+
+def _extract_wav(src_file: str, start_s: float, duration: float,
+                 out_path: str, video_track: bool = False) -> None:
+    """Extract a mono 44.1 kHz WAV clip from src_file.
+    video_track=True decodes the first video stream as audio for single-file
+    A/V drift measurement (correlate video sound vs audio track).
+    """
+    si = get_startupinfo()
+    if video_track:
+        cmd = ["ffmpeg", "-y", "-ss", str(start_s), "-i", src_file,
+               "-t", str(duration), "-map", "0:v:0",
+               "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", out_path]
+    else:
+        cmd = ["ffmpeg", "-y", "-ss", str(start_s), "-i", src_file,
+               "-t", str(duration), "-vn", "-map", "0:a:0",
+               "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", out_path]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, startupinfo=si)
+
+
+def _correlate_wavs(path1: str, path2: str) -> float:
+    """Bandpass-filter and cross-correlate two WAV files.
+    Returns offset in ms: positive = path2 is delayed relative to path1.
+    """
+    sr1, d1 = wavfile.read(path1)
+    _,   d2 = wavfile.read(path2)
+    if len(d1.shape) > 1: d1 = np.mean(d1, axis=1)
+    if len(d2.shape) > 1: d2 = np.mean(d2, axis=1)
+    d1 = d1.astype(np.float64); d2 = d2.astype(np.float64)
+    d1 -= np.mean(d1);  d2 -= np.mean(d2)
+    d1 /= (np.sqrt(np.mean(d1**2)) + 1e-10)
+    d2 /= (np.sqrt(np.mean(d2**2)) + 1e-10)
+    nyq = sr1 / 2
+    sos = signal.butter(4, [100/nyq, min(8000/nyq, 0.99)], btype='band', output='sos')
+    d1f = signal.sosfilt(sos, d1); d2f = signal.sosfilt(sos, d2)
+    corr = signal.correlate(d1f, d2f, mode='full', method='fft')
+    lags = signal.correlation_lags(len(d1f), len(d2f), mode='full')
+    mi = int(np.argmax(np.abs(corr))); lag = float(lags[mi])
+    if 0 < mi < len(corr)-1:
+        y1, y2, y3 = np.abs(corr[mi-1]), np.abs(corr[mi]), np.abs(corr[mi+1])
+        lag += 0.5*(y3-y1)/(2*y2-y1-y3+1e-10)
+    return round((-lag/sr1)*1000, 3)
+
+
+def _run_correlation(file1: str, file2: str,
+                     start1: float, start2: float,
+                     duration: float) -> float:
+    """Two-file mode: extract audio from both files and correlate."""
+    tmp1 = os.path.join(tempfile.gettempdir(), "drift_tmp_1.wav")
+    tmp2 = os.path.join(tempfile.gettempdir(), "drift_tmp_2.wav")
+    for p in [tmp1, tmp2]:
+        if os.path.exists(p): os.remove(p)
+    _extract_wav(file1, start1, duration, tmp1, video_track=False)
+    _extract_wav(file2, start2, duration, tmp2, video_track=False)
+    return _correlate_wavs(tmp1, tmp2)
+
+
+
+def drift_measure(point_index: int) -> None:
+    """Measure A/V offset at one time point (two-file mode only)."""
+    if not check_ffmpeg_before_analyze():
+        return
+    ref_path = entry_file1.get().strip()
+    source   = entry_file2.get().strip()
+    if not ref_path or not source:
+        messagebox.showerror("Error", "Select both File 1 (reference) and File 2 (source) first.")
+        return
+    try:
+        duration = float(drift_entry_duration.get())
+        if point_index == 0:
+            t_str = drift_entry_t1.get(); lbl = drift_lbl_result1
+        else:
+            t_str = drift_entry_t2.get(); lbl = drift_lbl_result2
+        t = to_seconds(t_str)
+        console_log(f"Drift point {point_index+1}: t={t:.1f}s...", "info")
+        offset_ms = _run_correlation(ref_path, source, t, t, duration)
+        drift_points[point_index] = {"time_s": t, "offset_ms": offset_ms}
+        sign = "+" if offset_ms >= 0 else ""
+        lbl.config(text=f"Offset: {sign}{offset_ms} ms", fg="#4a9eff")
+        console_log(f"  Point {point_index+1}: {sign}{offset_ms} ms", "ok")
+        _drift_update_calculated()
+    except Exception as e:
+        messagebox.showerror("Error", f"Measurement failed:\n{e}")
+        console_log(f"Drift measurement failed: {e}", "error")
+
+
+def _drift_update_calculated() -> None:
+    """Recompute drift rate and atempo from the two measured points."""
+    p1, p2 = drift_points[0], drift_points[1]
+    if p1 is None or p2 is None:
+        return
+    dt_s  = p2["time_s"]    - p1["time_s"]
+    d_off = p2["offset_ms"] - p1["offset_ms"]
+    if abs(dt_s) < 1.0:
+        drift_lbl_calc.config(text="Points too close - use a wider time gap.", fg="#ffaa44")
+        return
+    drift_rate = d_off / dt_s
+    atempo     = round(1.0 - drift_rate/1000.0, 8)
+    init_off   = round(p1["offset_ms"] - drift_rate*p1["time_s"], 2)
+    drift_lbl_calc.config(
+        text=(f"Drift rate:  {drift_rate:+.4f} ms/s\n"
+              f"atempo:      {atempo:.8f}\n"
+              f"Init offset: {init_off:+.2f} ms  (at t=0)"),
+        fg="#00cc66")
+    drift_lbl_calc._atempo         = atempo
+    drift_lbl_calc._initial_offset = init_off
+    console_log(f"Drift: {drift_rate:+.4f} ms/s  atempo={atempo:.8f}  init={init_off:+.2f} ms", "ok")
+    df_entry_atempo.delete(0, tk.END);  df_entry_atempo.insert(0, f"{atempo:.8f}")
+    df_entry_initoff.delete(0, tk.END); df_entry_initoff.insert(0, str(init_off))
+
+
+
+# ---------------------------------------------------------------------------
 # ZOOM / SCROLL HELPERS  (defined before GUI widgets that reference them)
 # ---------------------------------------------------------------------------
+
+def _get_file_duration(path: str) -> float:
+    """Return duration of media file in seconds via ffprobe. Returns 0.0 on failure."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, startupinfo=get_startupinfo()
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
 
 def to_seconds(t_str: str) -> float:
     """
@@ -559,11 +715,11 @@ def apply_manual_offset() -> None:
             res, color = "✓ Files perfectly synchronized!\nOffset: 0.00 ms", "#00ff88"
         elif offset_ms > 0:
             res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
-                   f"→ To sync {target_name}: set offset to -{offset_ms} ms")
+                   f"→ MKVToolNix delay for {target_name}: -{offset_ms} ms")
             color = "#ffa500"
         else:
             res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
-                   f"→ To sync {target_name}: set offset to +{abs(offset_ms)} ms")
+                   f"→ MKVToolNix delay for {target_name}: +{abs(offset_ms)} ms")
             color = "#ff6b6b"
 
         label_result.config(text=res, fg=color)
@@ -571,11 +727,153 @@ def apply_manual_offset() -> None:
         messagebox.showerror("Error", "Invalid offset value!")
 
 
+
+
+def export_drift_corrected() -> None:
+    """
+    Export drift-corrected audio in two steps to avoid container duration bugs:
+      Step 1: atempo + adelay/trim → lossless WAV (no duration metadata issue)
+      Step 2: WAV → original codec (AC3/AAC/etc.) at original bitrate
+
+    The final file has correct duration metadata and MKVToolNix accepts it
+    without warnings.  Only one lossy encode is performed.
+    """
+    if not check_ffmpeg_before_analyze():
+        return
+
+    # Need drift result – check label has the values
+    res_text = label_result.cget("text")
+    if "atempo" not in res_text and "stretch" not in res_text.lower():
+        messagebox.showerror("Error",
+            "Run analysis with \'Check drift\' enabled first.")
+        return
+
+    # Read atempo and initial offset from the result label via stored attributes
+    # They were set during drift calculation in _drift_update_calculated or
+    # directly in analyze_sync. We store them on label_result for retrieval.
+    try:
+        atempo   = label_result._atempo
+        init_off = label_result._init_off   # ms, signed
+        offset_ms_start = label_result._offset_ms  # initial static offset
+    except AttributeError:
+        messagebox.showerror("Error",
+            "Drift values not available.\nRun analysis with \'Check drift\' enabled.")
+        return
+
+    ref_file   = ref_var.get()
+    target_path = entry_file2.get() if ref_file == 1 else entry_file1.get()
+    if not target_path:
+        messagebox.showerror("Error", "No target file selected.")
+        return
+
+    # Detect original codec and bitrate via ffprobe
+    detected_codec   = "ac3"
+    detected_bitrate = "256k"
+    try:
+        import json
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name,bit_rate",
+             "-of", "json", target_path],
+            capture_output=True, text=True, startupinfo=get_startupinfo()
+        )
+        info = json.loads(probe.stdout)
+        stream = info.get("streams", [{}])[0]
+        if stream.get("codec_name"):
+            detected_codec = stream["codec_name"].lower()
+        if stream.get("bit_rate") and stream["bit_rate"] != "N/A":
+            br = int(stream["bit_rate"])
+            detected_bitrate = f"{br // 1000}k"
+    except Exception:
+        pass
+
+    # Map codec → ffmpeg encoder and container extension
+    _codec_map = {
+        "ac3":      ("ac3",           ".ac3"),
+        "eac3":     ("eac3",          ".eac3"),
+        "aac":      ("aac",           ".aac"),
+        "mp3":      ("libmp3lame",    ".mp3"),
+        "opus":     ("libopus",       ".opus"),
+        "flac":     ("flac",          ".flac"),
+        "vorbis":   ("libvorbis",     ".ogg"),
+        "dts":      ("dca",           ".dts"),
+    }
+    encoder, ext = _codec_map.get(detected_codec, ("ac3", ".ac3"))
+
+    import os as _os
+    base = _os.path.splitext(_os.path.basename(target_path))[0]
+    out_path = filedialog.asksaveasfilename(
+        title="Save drift-corrected audio as…",
+        defaultextension=ext,
+        initialfile=f"{base}_driftfixed{ext}",
+        filetypes=[
+            ("AC-3",  "*.ac3"), ("E-AC-3", "*.eac3"),
+            ("AAC",   "*.aac"), ("MP3",    "*.mp3"),
+            ("FLAC",  "*.flac"),("Opus",   "*.opus"),
+            ("All files", "*.*"),
+        ]
+    )
+    if not out_path:
+        return
+
+    import tempfile as _tmp
+    tmp_wav = _os.path.join(_tmp.gettempdir(), "driftfix_tmp.wav")
+
+    # ── Step 1: atempo + offset → lossless WAV ───────────────────────────────
+    if init_off >= 0:
+        delay_ms = int(round(init_off))
+        af1 = f"adelay={delay_ms}|{delay_ms},atempo={atempo}" if delay_ms > 0 else f"atempo={atempo}"
+        cmd1 = ["ffmpeg", "-y", "-i", target_path,
+                "-vn", "-map", "0:a:0", "-af", af1,
+                "-c:a", "pcm_s16le", tmp_wav]
+    else:
+        trim_s = abs(init_off) / 1000.0
+        af1 = f"atempo={atempo}"
+        cmd1 = ["ffmpeg", "-y", "-ss", str(trim_s), "-i", target_path,
+                "-vn", "-map", "0:a:0", "-af", af1,
+                "-c:a", "pcm_s16le", tmp_wav]
+
+    if encoder in ("flac", "pcm_s16le"):
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder, out_path]
+    elif encoder in ("libopus", "libvorbis"):
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder,
+                "-b:a", detected_bitrate, out_path]
+    else:
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder,
+                "-b:a", detected_bitrate, out_path]
+
+    console_log(f"Step 1/2  atempo={atempo}  init_off={init_off:+.1f} ms → WAV", "bold")
+    console_log("ffmpeg " + " ".join(cmd1[1:]), "cmd")
+    console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}", "bold")
+    console_log("ffmpeg " + " ".join(cmd2[1:]), "cmd")
+
+    def _do_export():
+        try:
+            root.after(0, lambda: set_progress(10, "Step 1: applying atempo..."))
+            _run_ffmpeg(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
+            console_log("Step 1 done", "ok")
+            root.after(0, lambda: set_progress(60, "Step 2: encoding..."))
+            _run_ffmpeg(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
+            _os.remove(tmp_wav)
+            root.after(0, lambda: set_progress(100, "Export done"))
+            console_log(f"✓ Saved: {out_path}", "ok")
+            root.after(0, lambda: messagebox.showinfo("Done",
+                f"Drift-corrected audio saved:\n{out_path}\n\n"
+                f"Codec: {detected_codec}  Bitrate: {detected_bitrate}\n"
+                f"atempo: {atempo}  delay: {init_off:+.1f} ms"))
+        except subprocess.CalledProcessError as e:
+            _rc = e.returncode
+            console_log(f"Export failed (exit {_rc})", "error")
+            root.after(0, lambda: (
+                messagebox.showerror("Export failed", f"FFmpeg exit {_rc}"),
+                clear_progress()
+            ))
+
+    import threading as _thr
+    _thr.Thread(target=_do_export, daemon=True).start()
+
 def zoom_in() -> None:
-    """
-    Halve the current zoom window width, centred on the current view midpoint.
-    No-op when already at the minimum zoom level or when no data is loaded.
-    """
+    """Halve the zoom window width, centred on the current midpoint."""
     if viz_data['data1'] is None:
         return
     current_range = viz_data['zoom_end'] - viz_data['zoom_start']
@@ -645,42 +943,40 @@ def select_file2() -> None:
         entry_file2.delete(0, tk.END)
         entry_file2.insert(0, f)
 
+def _run_analyze_sync_thread() -> None:
+    """Worker thread for analyze_sync – runs FFmpeg and correlation off the main thread."""
+    try:
+        _analyze_sync_impl()
+    except Exception as e:
+        root.after(0, lambda: (
+            messagebox.showerror("Error", f"Analysis failed:\n{e}"),
+            label_status.config(text="✗ Error occurred during analysis", fg="#ff4444"),
+            label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888"),
+            console_log(f"✗ Analysis failed: {e}", "error"),
+            btn_analyze.config(state=tk.NORMAL),
+            clear_progress()
+        ))
+
+
 def analyze_sync() -> None:
-    """
-    Main analysis pipeline triggered by the ANALYZE button.
-
-    Steps:
-        1. Validate that both file paths are provided.
-        2. Use FFmpeg to extract a mono 44.1 kHz WAV snippet from each file,
-           applying the user-defined start time, duration, and per-file
-           pre-offsets.  Temporary files are written to the system temp dir.
-        3. Load the WAV files with scipy, flatten to mono if necessary, and
-           convert to float64.
-        4. Remove DC offset and normalise by RMS energy so that the correlation
-           measures shape similarity rather than loudness difference.
-        5. Apply a 4th-order Butterworth bandpass filter (100 Hz – 8 kHz) to
-           both signals to focus on the speech/music band and reject rumble.
-        6. Compute the full cross-correlation via FFT and find the lag of the
-           absolute peak.
-        7. Refine the integer lag with parabolic interpolation to achieve
-           sub-sample (sub-millisecond) precision.
-        8. Convert lag to milliseconds, add the pre-offset contribution, and
-           display a human-readable result.
-        9. Store the processed waveforms and offset in viz_data and trigger a
-           chart redraw.
-
-    All exceptions are caught and reported as error dialogs so that the GUI
-    remains responsive on unexpected failures.
-    """
-    file1 = entry_file1.get()
-    file2 = entry_file2.get()
-
+    """Launch the analysis pipeline in a background thread to keep UI responsive."""
     if not check_ffmpeg_before_analyze():
         return
-
+    file1 = entry_file1.get()
+    file2 = entry_file2.get()
     if not file1 or not file2:
         messagebox.showerror("Error", "Select both audio/video files!")
         return
+    btn_analyze.config(state=tk.DISABLED)
+    import threading
+    threading.Thread(target=_run_analyze_sync_thread, daemon=True).start()
+
+
+def _analyze_sync_impl() -> None:
+    """Run the full sync analysis pipeline. Called from a background thread."""
+
+    file1 = entry_file1.get()
+    file2 = entry_file2.get()
 
     path_wav1 = os.path.join(tempfile.gettempdir(), "sync_temp_1.wav")
     path_wav2 = os.path.join(tempfile.gettempdir(), "sync_temp_2.wav")
@@ -690,8 +986,7 @@ def analyze_sync() -> None:
         if os.path.exists(p):
             os.remove(p)
 
-    label_status.config(text="● Extracting audio from files...", fg="#ffa500")
-    root.update()
+    root.after(0, lambda: (label_status.config(text="● Extracting audio from files...", fg="#ffa500"), set_progress(5, "Extracting...")))
     console_log("── Starting analysis ──────────────────────────", "bold")
     console_log(f"File 1: {file1}", "info")
     console_log(f"File 2: {file2}", "info")
@@ -718,17 +1013,16 @@ def analyze_sync() -> None:
                 "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", path_wav2]
 
         console_log(f"ffmpeg  File 1  (start={start_time1:.3f}s  dur={duration}s)", "cmd")
-        subprocess.run(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       check=True, startupinfo=get_startupinfo())
+        _run_ffmpeg(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
         console_log("File 1 extracted OK", "ok")
+        root.after(0, lambda: set_progress(25, "File 1 extracted..."))
 
         console_log(f"ffmpeg  File 2  (start={start_time2:.3f}s  dur={duration}s)", "cmd")
-        subprocess.run(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       check=True, startupinfo=get_startupinfo())
+        _run_ffmpeg(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
         console_log("File 2 extracted OK", "ok")
+        root.after(0, lambda: set_progress(50, "File 2 extracted..."))
 
-        label_status.config(text="● Analyzing synchronization (signal correlation)...", fg="#ffa500")
-        root.update()
+        root.after(0, lambda: set_progress(55, "Correlating..."))
         console_log("Running cross-correlation…", "info")
         sr1, data1 = wavfile.read(path_wav1)
         sr2, data2 = wavfile.read(path_wav2)
@@ -795,37 +1089,104 @@ def analyze_sync() -> None:
 
         total_offset_ms = round(offset_ms + preoffset_diff_ms, 2)
 
+        # Build the human-readable result string
+        offset_display = offset_ms
         if offset_ms == 0:
-            res = "✓ Files perfectly synchronized!\nOffset: 0.00 ms"
+            res   = "✓ Files perfectly synchronized"
             color = "#00ff88"
         elif offset_ms > 0:
-            res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
-                   f"→ To sync {target_name}: set offset to -{offset_ms} ms")
+            res   = f"● {target_name} delayed by {offset_ms} ms"
             color = "#ffa500"
         else:
-            res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
-                   f"→ To sync {target_name}: set offset to +{abs(offset_ms)} ms")
+            res   = f"● {target_name} ahead by {abs(offset_ms)} ms"
             color = "#ff6b6b"
 
-        # Append pre-offset summary and total offset when pre-offsets were used
+        # Pre-offset correction
         if preoffset1 != 0 or preoffset2 != 0:
-            res += "\n\n📌 Pre-offsets:"
-            if preoffset1 != 0:
-                res += f"\n   File 1: +{preoffset1 * 1000:.0f} ms"
-            if preoffset2 != 0:
-                res += f"\n   File 2: +{preoffset2 * 1000:.0f} ms"
+            res += f"\n  (total with pre-offsets: {total_offset_ms:+.2f} ms)"
 
-            res += "\n\n🎯 TOTAL OFFSET: "
-            if total_offset_ms == 0:
-                res += "0.00 ms"
-            elif total_offset_ms > 0:
-                res += f"+{total_offset_ms} ms"
-            else:
-                res += f"{total_offset_ms} ms"
+        # MKVToolNix instruction for the offset
+        if offset_ms != 0:
+            mkv_delay = -offset_ms if offset_ms > 0 else abs(offset_ms)
+            mkv_sign  = "+" if mkv_delay >= 0 else ""
+            res += f"\n\nMKVToolNix → delay {target_name}:  {mkv_sign}{mkv_delay} ms"
 
-        label_result.config(text=res, fg=color)
-        label_status.config(text="✓ Analysis completed successfully", fg="#00ff88")
+        # ── Optional drift check ─────────────────────────────────────────────
+        if check_drift_var.get():
+            try:
+                base_file = file1 if ref_file == 1 else file2
+                total_dur = _get_file_duration(base_file)
+                if total_dur > 60:
+                    clip_dur = float(entry_duration.get())
+                    t2 = total_dur - clip_dur - 5
+                    t1 = start_time
+                    if t2 > t1 + 30:
+                        preoffset1_v = float(entry_preoffset1.get())
+                        preoffset2_v = float(entry_preoffset2.get())
+                        console_log(f"Drift check: measuring at t={t2:.1f}s (near end)...", "info")
+                        root.after(0, lambda: (
+                            label_status.config(text="● Drift check: measuring near end of file...", fg="#ffa500"),
+                            set_progress(72, "Drift check...")
+                        ))
+                        offset_ms_t2_raw = _run_correlation(file1, file2, t2 + preoffset1_v, t2 + preoffset2_v, clip_dur)
+                        offset_ms_t2 = round(-offset_ms_t2_raw if ref_file == 1 else offset_ms_t2_raw, 2)
+                        dt_s       = t2 - t1
+                        d_off      = offset_ms_t2 - offset_ms
+                        drift_rate  = d_off / dt_s
+                        atempo      = round(1.0 - drift_rate / 1000.0, 8)
+                        stretch_pct = round((atempo - 1.0) * 100, 6)
+                        init_off    = round(offset_ms - drift_rate * t1, 2)
+
+                        if abs(drift_rate) < 0.05:
+                            res += "\n\n● No significant drift detected."
+                            console_log(f"Drift: {drift_rate:+.4f} ms/s – negligible", "ok")
+                        else:
+                            mkv_delay_str = f"{'-' if offset_ms > 0 else '+'}{abs(offset_ms)}"
+                            res += (
+                                f"\n\n● Drift detected  ({drift_rate:+.4f} ms/s)"
+                                f"\n\nMKVToolNix → {target_name}:"
+                                f"\n  delay:          {mkv_delay_str} ms"
+                                f"\n  stretch factor: {atempo:.8f}"
+                                f"\n  stretch %:      {stretch_pct:+.6f}%"
+                            )
+                            console_log(f"Drift: {drift_rate:+.4f} ms/s  stretch={atempo:.8f}", "warn")
+                            _drift_atempo_tmp   = atempo
+                            _drift_initoff_tmp  = init_off if "init_off" in dir() else float(offset_ms)
+                    else:
+                        res += "\n\n● Drift check skipped (points too close)."
+                else:
+                    res += "\n\n● Drift check skipped (file too short)."
+            except Exception as drift_err:
+                res += f"\n\n● Drift check failed: {drift_err}"
+                console_log(f"Drift check error: {drift_err}", "error")
+
+        # Store drift values on label_result for export_drift_corrected()
+        label_result._offset_ms = offset_ms
+        try:
+            label_result._atempo   = _drift_atempo_tmp
+            label_result._init_off = _drift_initoff_tmp
+        except NameError:
+            label_result._atempo   = 1.0
+            label_result._init_off = float(offset_ms)
+
+        def _finish_ui(_res=res, _color=color):
+            label_result._offset_ms = offset_ms
+            try:
+                label_result._atempo   = _drift_atempo_tmp
+                label_result._init_off = _drift_initoff_tmp
+            except NameError:
+                label_result._atempo   = 1.0
+                label_result._init_off = float(offset_ms)
+            label_result.config(text=_res, fg=_color)
+            label_status.config(text="✓ Analysis completed successfully", fg="#00ff88")
+            btn_analyze.config(state=tk.NORMAL)
+            set_progress(100, "Done")
+            entry_manual_offset.delete(0, tk.END)
+            entry_manual_offset.insert(0, str(offset_ms))
+            update_visualization()
+        root.after(0, _finish_ui)
         console_log(f"Result: offset = {offset_ms} ms  (total = {total_offset_ms} ms)", "ok")
+        root.after(0, lambda: set_progress(90, "Finalizing..."))
         console_log("── Analysis complete ───────────────────────────", "bold")
 
         # Store filtered waveforms and integer lag for the visualisation layer
@@ -836,18 +1197,17 @@ def analyze_sync() -> None:
         viz_data['zoom_start'] = 0
         viz_data['zoom_end'] = len(data1_filtered)
 
-        # Pre-fill the manual offset field with the detected offset so the user
-        # can fine-tune it without having to type the value from scratch
-        entry_manual_offset.delete(0, tk.END)
-        entry_manual_offset.insert(0, str(offset_ms))
-
-        update_visualization()
 
     except Exception as e:
-        messagebox.showerror("Error", f"Analysis failed:\n{str(e)}")
-        label_status.config(text="✗ Error occurred during analysis", fg="#ff4444")
-        label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888")
-        console_log(f"✗ Analysis failed: {e}", "error")
+        _err = str(e)
+        root.after(0, lambda: (
+            messagebox.showerror("Error", f"Analysis failed:\n{_err}"),
+            label_status.config(text="✗ Error occurred during analysis", fg="#ff4444"),
+            label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888"),
+            console_log(f"✗ Analysis failed: {_err}", "error"),
+            btn_analyze.config(state=tk.NORMAL),
+            clear_progress()
+        ))
 
 # ===========================================================================
 # GUI SETUP
@@ -868,6 +1228,7 @@ root.resizable(False, False)
 # Apply dark title bar as soon as the window handle is available
 root.update()
 _apply_dark_titlebar(root)
+root.protocol("WM_DELETE_WINDOW", _on_close)
 
 bg_main = "#1a1a1a"
 bg_panel = "#252525"
@@ -879,13 +1240,97 @@ btn_primary = "#2a7de1"
 btn_success = "#28a745"
 btn_hover = "#3d8bff"
 
-ref_var = tk.IntVar(value=1)
+ref_var         = tk.IntVar(value=1)
+check_drift_var = tk.BooleanVar(value=False)
 
-# ---------------------------------------------------------------------------
-# Main container
-# ---------------------------------------------------------------------------
+
+# Progress bar – packed at the very bottom of the root window, full width
+progress_var = tk.DoubleVar(value=0)
+
+# Bottom status row: spinner + label + progress bar
+_status_row = tk.Frame(root, bg="#111111", height=22)
+_status_row.pack(side=tk.BOTTOM, fill=tk.X)
+_status_row.pack_propagate(False)
+
+progress_label = tk.Label(_status_row, text="", bg="#111111", fg="#888888",
+                           font=("Segoe UI", 8), anchor=tk.W)
+progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+progress_bar = ttk.Progressbar(root, variable=progress_var,
+                                maximum=100, mode='determinate')
+progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+# Console spinner – animates a braille spinner on a dedicated line in the
+# console Text widget so the user can see the app is working.
+_spinner_frames  = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_spinner_idx     = 0
+_spinner_job     = None
+_spinner_active  = False
+_SPINNER_MARK    = "<<SPINNER>>"   # unique tag to find/replace the spinner line
+
+
+def _spinner_tick():
+    global _spinner_idx, _spinner_job
+    if not _spinner_active:
+        return
+    frame = _spinner_frames[_spinner_idx % len(_spinner_frames)]
+    _spinner_idx += 1
+    for w in _console_widgets:
+        try:
+            w.config(state=tk.NORMAL)
+            # Find and update the spinner line in-place
+            idx = w.search(_SPINNER_MARK, "1.0", tk.END)
+            if idx:
+                line_start = idx.split(".")[0] + ".0"
+                line_end   = idx.split(".")[0] + ".end"
+                w.delete(line_start, line_end)
+                w.insert(line_start, f"  {frame}  working...", "spinner")
+            w.config(state=tk.DISABLED)
+        except Exception:
+            pass
+    _spinner_job = root.after(80, _spinner_tick)
+
+
+def spinner_start(label: str = "working...") -> None:
+    """Insert a spinner line into the console and start animating it."""
+    global _spinner_active, _spinner_idx
+    if _spinner_active:
+        return
+    _spinner_active = True
+    _spinner_idx    = 0
+    for w in _console_widgets:
+        try:
+            w.config(state=tk.NORMAL)
+            w.insert(tk.END, f"  ⠋  {label} {_SPINNER_MARK}\n", "spinner")
+            w.see(tk.END)
+            w.config(state=tk.DISABLED)
+        except Exception:
+            pass
+    _spinner_tick()
+
+
+def spinner_stop() -> None:
+    """Remove the spinner line from the console and stop animating."""
+    global _spinner_active, _spinner_job
+    _spinner_active = False
+    if _spinner_job:
+        root.after_cancel(_spinner_job)
+        _spinner_job = None
+    for w in _console_widgets:
+        try:
+            w.config(state=tk.NORMAL)
+            idx = w.search(_SPINNER_MARK, "1.0", tk.END)
+            if idx:
+                line_num   = idx.split(".")[0]
+                line_start = f"{line_num}.0"
+                line_end   = f"{int(line_num)+1}.0"
+                w.delete(line_start, line_end)
+            w.config(state=tk.DISABLED)
+        except Exception:
+            pass
+
 main_container = tk.Frame(root, bg=bg_main)
-main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 4))
 
 # === TOP ROW: Files + Parameters ===
 top_row = tk.Frame(main_container, bg=bg_main)
@@ -975,6 +1420,38 @@ entry_duration.insert(0, "30")
 entry_duration.pack(ipady=5, pady=3)
 tk.Label(duration_container, text="(30-60 rec.)", bg=bg_panel, fg="#666666",
          font=("Segoe UI", 7)).pack()
+
+# Drift check option
+drift_check_container = tk.Frame(params_inner, bg=bg_panel)
+drift_check_container.pack(side=tk.LEFT, padx=(15, 0))
+
+tk.Checkbutton(
+    drift_check_container, text="Check drift", variable=check_drift_var,
+    bg=bg_panel, fg=fg_dim, selectcolor=bg_input,
+    activebackground=bg_panel, activeforeground=fg_main,
+    font=("Segoe UI", 9)
+).pack(anchor=tk.W)
+
+
+
+
+def set_progress(pct: float, text: str = "") -> None:
+    """Update progress bar and start/stop console spinner from any thread."""
+    def _update():
+        progress_var.set(pct)
+        progress_label.config(text=text, fg="#aaaaaa" if pct < 100 else "#00cc66")
+        if pct <= 0 or pct >= 100:
+            spinner_stop()
+        elif not _spinner_active:
+            spinner_start(text)
+    root.after(0, _update)
+
+def clear_progress() -> None:
+    def _clear():
+        progress_var.set(0)
+        progress_label.config(text="")
+        spinner_stop()
+    root.after(0, _clear)
 
 # === BOTTOM ROW: Chart | Controls | Console ===
 bottom_row = tk.Frame(main_container, bg=bg_main)
@@ -1089,25 +1566,72 @@ tk.Label(manual_section, text="(in milliseconds)", bg=bg_panel, fg="#666666",
 # SEPARATOR
 tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
 
-# TIPS SECTION
-tips_frame = tk.LabelFrame(controls_inner, text=" 💡 Tips ", bg=bg_panel, fg=fg_accent,
-                           font=("Segoe UI", 9, "bold"), relief=tk.GROOVE, bd=1)
-tips_frame.pack(fill=tk.BOTH, expand=True)
+# EXPORT DRIFT-CORRECTED AUDIO
+tk.Button(controls_inner, text="⬇ Export Drift-Corrected Audio",
+          command=export_drift_corrected,
+          bg="#1a3a5a", fg="#ffffff", relief=tk.FLAT, cursor="hand2",
+          font=("Segoe UI", 9, "bold"),
+          activebackground="#2a5a8a").pack(fill=tk.X, ipady=8, pady=(0, 15))
 
-tips_text = tk.Text(tips_frame, bg=bg_panel, fg="#999999",
-                    font=("Segoe UI", 7), relief=tk.FLAT, wrap=tk.WORD,
-                    borderwidth=0, highlightthickness=0, cursor="arrow")
-tips_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-tips_text.insert(1.0,
-    "SELECT clips with:\n"
-    "• Clear speech/music\n"
-    "• Single language\n"
-    "• Sharp sounds (claps/hits)\n\n"
-    "AVOID:\n"
-    "• Multilingual sections\n"
-    "• Background noise\n"
-    "• Long pauses/silence")
-tips_text.config(state=tk.DISABLED)
+# TIPS BUTTON
+def show_tips():
+    """Show a popup with usage tips."""
+    popup = tk.Toplevel(root)
+    popup.title("Tips")
+    popup.configure(bg="#1a1a1a")
+    popup.resizable(False, False)
+    popup.update()
+    _apply_dark_titlebar(popup)
+
+    tk.Label(popup, text="💡 Tips for best results",
+             bg="#1a1a1a", fg="#4a9eff",
+             font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 8))
+
+    tips_content = (
+        "SELECT clips with:\n"
+        "  • Clear speech or music\n"
+        "  • Single language\n"
+        "  • Sharp transients (claps, hits, drums)\n"
+        "  • 30–60 seconds for best accuracy\n"
+        "\n"
+        "AVOID:\n"
+        "  • Long silences or ambient noise only\n"
+        "  • Multilingual or heavily overlapping voices\n"
+        "  • Very quiet sections\n"
+        "\n"
+        "DRIFT CHECK:\n"
+        "  • Uses the start clip + last 30s of the file\n"
+        "  • Stretch factor goes into MKVToolNix\n"
+        "  • Values < 1.0 slow the audio, > 1.0 speed it up\n"
+        "\n"
+        "OFFSET SIGN CONVENTION:\n"
+        "  • Positive offset → target is delayed\n"
+        "    set a negative delay in MKVToolNix\n"
+        "  • Negative offset → target is ahead\n"
+        "    set a positive delay in MKVToolNix"
+    )
+
+    txt = tk.Label(popup, text=tips_content,
+                   bg="#1a1a1a", fg="#aaaaaa",
+                   font=("Segoe UI", 9), justify=tk.LEFT, anchor=tk.W)
+    txt.pack(padx=20, pady=(0, 8), anchor=tk.W)
+
+    tk.Button(popup, text="Close", command=popup.destroy,
+              bg="#333333", fg="#ffffff", relief=tk.FLAT,
+              font=("Segoe UI", 9), cursor="hand2",
+              activebackground="#444444",
+              padx=20, pady=6).pack(pady=(4, 16))
+
+    # Centre popup on main window
+    popup.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width()  - popup.winfo_width())  // 2
+    y = root.winfo_y() + (root.winfo_height() - popup.winfo_height()) // 2
+    popup.geometry(f"+{x}+{y}")
+    popup.grab_set()
+
+tk.Button(controls_inner, text="💡 Tips", command=show_tips,
+          bg="#333333", fg=fg_dim, relief=tk.FLAT, cursor="hand2",
+          font=("Segoe UI", 9), activebackground="#444444").pack(fill=tk.X, ipady=6)
 
 # ── RIGHT: Console / log panel ──────────────────────────────────────────────
 console_panel = tk.LabelFrame(bottom_row, text=" 🖥 Console ", bg=bg_panel, fg=fg_accent,
@@ -1157,13 +1681,18 @@ console_text.tag_config("ok",    foreground="#00cc66")
 console_text.tag_config("warn",  foreground="#ffaa44")
 console_text.tag_config("error", foreground="#ff5555")
 console_text.tag_config("cmd",   foreground="#4a9eff")
-console_text.tag_config("bold",  foreground="#ffffff")
+console_text.tag_config("bold",    foreground="#ffffff")
+console_text.tag_config("spinner", foreground="#4a9eff")
+
+# Register this widget so console_log() writes to it
+_console_widgets.append(console_text)
 
 # Clear button – below the text frame, never overlapping the scrollbar
 tk.Button(console_inner, text="Clear", command=console_clear,
           bg="#333333", fg=fg_dim, relief=tk.FLAT, cursor="hand2",
           font=("Segoe UI", 7), activebackground="#444444",
           pady=2).pack(anchor=tk.E, pady=(4, 0))
+
 
 
 # ---------------------------------------------------------------------------

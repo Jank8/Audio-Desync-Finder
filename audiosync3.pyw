@@ -78,17 +78,22 @@ def _apply_dark_titlebar(window) -> None:
 
 
 def _run_ffmpeg(cmd: list, **kwargs) -> subprocess.CompletedProcess:
-    """Run an ffmpeg command, registering it so it can be killed on exit."""
+    """Run an ffmpeg command, registering the Popen object so _kill_ffmpeg()
+    can terminate it immediately even while it is running in a thread."""
     proc = subprocess.Popen(cmd, **kwargs)
     _ffmpeg_procs.append(proc)
     try:
-        proc.wait()
+        proc.communicate()   # blocks thread but leaves proc killable from main thread
     finally:
         try:
             _ffmpeg_procs.remove(proc)
         except ValueError:
             pass
-    if proc.returncode != 0:
+    # Allow killed exit codes (-9, -15 on Unix; 1 is ffmpeg's own error code)
+    # On Windows a killed process returns a large negative number or non-zero.
+    # We only raise on "real" non-zero exits, not on process being killed.
+    killed_codes = {-9, -15, 1}
+    if proc.returncode != 0 and proc.returncode not in killed_codes:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
     return subprocess.CompletedProcess(cmd, proc.returncode)
 
@@ -715,11 +720,11 @@ def apply_manual_offset() -> None:
             res, color = "✓ Files perfectly synchronized!\nOffset: 0.00 ms", "#00ff88"
         elif offset_ms > 0:
             res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
-                   f"→ MKVToolNix delay for {target_name}: -{offset_ms} ms")
+                   f"→ Delay {target_name}: -{offset_ms} ms")
             color = "#ffa500"
         else:
             res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
-                   f"→ MKVToolNix delay for {target_name}: +{abs(offset_ms)} ms")
+                   f"→ Delay {target_name}: +{abs(offset_ms)} ms")
             color = "#ff6b6b"
 
         label_result.config(text=res, fg=color)
@@ -735,8 +740,8 @@ def export_drift_corrected() -> None:
       Step 1: atempo + adelay/trim → lossless WAV (no duration metadata issue)
       Step 2: WAV → original codec (AC3/AAC/etc.) at original bitrate
 
-    The final file has correct duration metadata and MKVToolNix accepts it
-    without warnings.  Only one lossy encode is performed.
+    The final file has correct duration metadata and is accepted without
+    warnings.  Only one lossy encode is performed.
     """
     if not check_ffmpeg_before_analyze():
         return
@@ -766,14 +771,16 @@ def export_drift_corrected() -> None:
         messagebox.showerror("Error", "No target file selected.")
         return
 
-    # Detect original codec and bitrate via ffprobe
-    detected_codec   = "ac3"
-    detected_bitrate = "256k"
+    # Detect original codec, bitrate, channels and sample rate via ffprobe
+    detected_codec      = "ac3"
+    detected_bitrate    = "256k"
+    detected_channels   = None   # None = let ffmpeg decide (preserves source)
+    detected_samplerate = None
     try:
         import json
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
-             "-show_entries", "stream=codec_name,bit_rate",
+             "-show_entries", "stream=codec_name,bit_rate,channels,sample_rate",
              "-of", "json", target_path],
             capture_output=True, text=True, startupinfo=get_startupinfo()
         )
@@ -784,6 +791,10 @@ def export_drift_corrected() -> None:
         if stream.get("bit_rate") and stream["bit_rate"] != "N/A":
             br = int(stream["bit_rate"])
             detected_bitrate = f"{br // 1000}k"
+        if stream.get("channels"):
+            detected_channels = int(stream["channels"])
+        if stream.get("sample_rate"):
+            detected_samplerate = int(stream["sample_rate"])
     except Exception:
         pass
 
@@ -833,18 +844,27 @@ def export_drift_corrected() -> None:
                 "-vn", "-map", "0:a:0", "-af", af1,
                 "-c:a", "pcm_s16le", tmp_wav]
 
+    # Build extra args to preserve original channel count and sample rate
+    _preserve = []
+    if detected_channels:
+        _preserve += ["-ac", str(detected_channels)]
+    if detected_samplerate:
+        _preserve += ["-ar", str(detected_samplerate)]
+
     if encoder in ("flac", "pcm_s16le"):
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder, out_path]
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder, out_path]
     elif encoder in ("libopus", "libvorbis"):
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder,
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
                 "-b:a", detected_bitrate, out_path]
     else:
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", encoder,
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
                 "-b:a", detected_bitrate, out_path]
 
+    _ch_str = f"  {detected_channels}ch" if detected_channels else ""
+    _sr_str = f"  {detected_samplerate}Hz" if detected_samplerate else ""
     console_log(f"Step 1/2  atempo={atempo}  init_off={init_off:+.1f} ms → WAV", "bold")
     console_log("ffmpeg " + " ".join(cmd1[1:]), "cmd")
-    console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}", "bold")
+    console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
     console_log("ffmpeg " + " ".join(cmd2[1:]), "cmd")
 
     def _do_export():
@@ -1109,7 +1129,7 @@ def _analyze_sync_impl() -> None:
         if offset_ms != 0:
             mkv_delay = -offset_ms if offset_ms > 0 else abs(offset_ms)
             mkv_sign  = "+" if mkv_delay >= 0 else ""
-            res += f"\n\nMKVToolNix → delay {target_name}:  {mkv_sign}{mkv_delay} ms"
+            res += f"\n\nDelay {target_name}:  {mkv_sign}{mkv_delay} ms"
 
         # ── Optional drift check ─────────────────────────────────────────────
         if check_drift_var.get():
@@ -1124,10 +1144,8 @@ def _analyze_sync_impl() -> None:
                         preoffset1_v = float(entry_preoffset1.get())
                         preoffset2_v = float(entry_preoffset2.get())
                         console_log(f"Drift check: measuring at t={t2:.1f}s (near end)...", "info")
-                        root.after(0, lambda: (
-                            label_status.config(text="● Drift check: measuring near end of file...", fg="#ffa500"),
-                            set_progress(72, "Drift check...")
-                        ))
+                        root.after(0, lambda: label_status.config(text="● Drift check: measuring near end of file...", fg="#ffa500"))
+                        root.after(0, lambda: set_progress(72, "Drift check..."))
                         offset_ms_t2_raw = _run_correlation(file1, file2, t2 + preoffset1_v, t2 + preoffset2_v, clip_dur)
                         offset_ms_t2 = round(-offset_ms_t2_raw if ref_file == 1 else offset_ms_t2_raw, 2)
                         dt_s       = t2 - t1
@@ -1144,7 +1162,7 @@ def _analyze_sync_impl() -> None:
                             mkv_delay_str = f"{'-' if offset_ms > 0 else '+'}{abs(offset_ms)}"
                             res += (
                                 f"\n\n● Drift detected  ({drift_rate:+.4f} ms/s)"
-                                f"\n\nMKVToolNix → {target_name}:"
+                                f"\n\nDelay {target_name}:"
                                 f"\n  delay:          {mkv_delay_str} ms"
                                 f"\n  stretch factor: {atempo:.8f}"
                                 f"\n  stretch %:      {stretch_pct:+.6f}%"
@@ -1183,12 +1201,7 @@ def _analyze_sync_impl() -> None:
             set_progress(100, "Done")
             entry_manual_offset.delete(0, tk.END)
             entry_manual_offset.insert(0, str(offset_ms))
-            update_visualization()
-        root.after(0, _finish_ui)
-        console_log(f"Result: offset = {offset_ms} ms  (total = {total_offset_ms} ms)", "ok")
-        root.after(0, lambda: set_progress(90, "Finalizing..."))
-        console_log("── Analysis complete ───────────────────────────", "bold")
-
+            root.after(50, update_visualization)
         # Store filtered waveforms and integer lag for the visualisation layer
         viz_data['data1'] = data1_filtered
         viz_data['data2'] = data2_filtered
@@ -1197,6 +1210,10 @@ def _analyze_sync_impl() -> None:
         viz_data['zoom_start'] = 0
         viz_data['zoom_end'] = len(data1_filtered)
 
+        console_log(f"Result: offset = {offset_ms} ms  (total = {total_offset_ms} ms)", "ok")
+        console_log("── Analysis complete ───────────────────────────", "bold")
+        root.after(0, _finish_ui)
+        return  # prevent falling into the except block
 
     except Exception as e:
         _err = str(e)
@@ -1260,75 +1277,21 @@ progress_bar = ttk.Progressbar(root, variable=progress_var,
                                 maximum=100, mode='determinate')
 progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-# Console spinner – animates a braille spinner on a dedicated line in the
-# console Text widget so the user can see the app is working.
-_spinner_frames  = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-_spinner_idx     = 0
-_spinner_job     = None
-_spinner_active  = False
-_SPINNER_MARK    = "<<SPINNER>>"   # unique tag to find/replace the spinner line
 
 
-def _spinner_tick():
-    global _spinner_idx, _spinner_job
-    if not _spinner_active:
-        return
-    frame = _spinner_frames[_spinner_idx % len(_spinner_frames)]
-    _spinner_idx += 1
-    for w in _console_widgets:
-        try:
-            w.config(state=tk.NORMAL)
-            # Find and update the spinner line in-place
-            idx = w.search(_SPINNER_MARK, "1.0", tk.END)
-            if idx:
-                line_start = idx.split(".")[0] + ".0"
-                line_end   = idx.split(".")[0] + ".end"
-                w.delete(line_start, line_end)
-                w.insert(line_start, f"  {frame}  working...", "spinner")
-            w.config(state=tk.DISABLED)
-        except Exception:
-            pass
-    _spinner_job = root.after(80, _spinner_tick)
+def set_progress(pct: float, text: str = "") -> None:
+    """Update progress bar from any thread via root.after."""
+    def _update():
+        progress_var.set(pct)
+        progress_label.config(text=text, fg="#aaaaaa" if pct < 100 else "#00cc66")
+    root.after(0, _update)
 
+def clear_progress() -> None:
+    root.after(0, lambda: (progress_var.set(0), progress_label.config(text="")))
 
-def spinner_start(label: str = "working...") -> None:
-    """Insert a spinner line into the console and start animating it."""
-    global _spinner_active, _spinner_idx
-    if _spinner_active:
-        return
-    _spinner_active = True
-    _spinner_idx    = 0
-    for w in _console_widgets:
-        try:
-            w.config(state=tk.NORMAL)
-            w.insert(tk.END, f"  ⠋  {label} {_SPINNER_MARK}\n", "spinner")
-            w.see(tk.END)
-            w.config(state=tk.DISABLED)
-        except Exception:
-            pass
-    _spinner_tick()
-
-
-def spinner_stop() -> None:
-    """Remove the spinner line from the console and stop animating."""
-    global _spinner_active, _spinner_job
-    _spinner_active = False
-    if _spinner_job:
-        root.after_cancel(_spinner_job)
-        _spinner_job = None
-    for w in _console_widgets:
-        try:
-            w.config(state=tk.NORMAL)
-            idx = w.search(_SPINNER_MARK, "1.0", tk.END)
-            if idx:
-                line_num   = idx.split(".")[0]
-                line_start = f"{line_num}.0"
-                line_end   = f"{int(line_num)+1}.0"
-                w.delete(line_start, line_end)
-            w.config(state=tk.DISABLED)
-        except Exception:
-            pass
-
+# ---------------------------------------------------------------------------
+# MAIN CONTAINER + TOP ROW (files + parameters)
+# ---------------------------------------------------------------------------
 main_container = tk.Frame(root, bg=bg_main)
 main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 4))
 
@@ -1338,7 +1301,7 @@ top_row.pack(fill=tk.X, pady=(0, 15))
 
 # FILES SECTION
 files_frame = tk.LabelFrame(top_row, text=" Audio/Video Files ", bg=bg_panel, fg=fg_accent,
-                            font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
+                             font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
 files_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
 
 # File 1
@@ -1356,7 +1319,7 @@ tk.Button(file1_container, text="Browse", command=select_file1, bg=btn_primary, 
 tk.Label(file1_container, text="Pre-offset:", bg=bg_panel, fg=fg_dim,
          font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(5, 2))
 entry_preoffset1 = tk.Entry(file1_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                            relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
+                             relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
 entry_preoffset1.insert(0, "0")
 entry_preoffset1.pack(side=tk.LEFT, ipady=3, padx=(0, 5))
 tk.Label(file1_container, text="s", bg=bg_panel, fg=fg_dim,
@@ -1380,7 +1343,7 @@ tk.Button(file2_container, text="Browse", command=select_file2, bg=btn_primary, 
 tk.Label(file2_container, text="Pre-offset:", bg=bg_panel, fg=fg_dim,
          font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(5, 2))
 entry_preoffset2 = tk.Entry(file2_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                            relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
+                             relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
 entry_preoffset2.insert(0, "0")
 entry_preoffset2.pack(side=tk.LEFT, ipady=3, padx=(0, 5))
 tk.Label(file2_container, text="s", bg=bg_panel, fg=fg_dim,
@@ -1391,7 +1354,7 @@ tk.Radiobutton(file2_container, text="Base", variable=ref_var, value=2, bg=bg_pa
 
 # PARAMETERS SECTION
 params_frame = tk.LabelFrame(top_row, text=" Analysis Parameters ", bg=bg_panel, fg=fg_accent,
-                             font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
+                              font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
 params_frame.pack(side=tk.LEFT, fill=tk.Y)
 
 params_inner = tk.Frame(params_frame, bg=bg_panel)
@@ -1424,34 +1387,10 @@ tk.Label(duration_container, text="(30-60 rec.)", bg=bg_panel, fg="#666666",
 # Drift check option
 drift_check_container = tk.Frame(params_inner, bg=bg_panel)
 drift_check_container.pack(side=tk.LEFT, padx=(15, 0))
-
-tk.Checkbutton(
-    drift_check_container, text="Check drift", variable=check_drift_var,
-    bg=bg_panel, fg=fg_dim, selectcolor=bg_input,
-    activebackground=bg_panel, activeforeground=fg_main,
-    font=("Segoe UI", 9)
-).pack(anchor=tk.W)
-
-
-
-
-def set_progress(pct: float, text: str = "") -> None:
-    """Update progress bar and start/stop console spinner from any thread."""
-    def _update():
-        progress_var.set(pct)
-        progress_label.config(text=text, fg="#aaaaaa" if pct < 100 else "#00cc66")
-        if pct <= 0 or pct >= 100:
-            spinner_stop()
-        elif not _spinner_active:
-            spinner_start(text)
-    root.after(0, _update)
-
-def clear_progress() -> None:
-    def _clear():
-        progress_var.set(0)
-        progress_label.config(text="")
-        spinner_stop()
-    root.after(0, _clear)
+tk.Checkbutton(drift_check_container, text="Check drift", variable=check_drift_var,
+               bg=bg_panel, fg=fg_dim, selectcolor=bg_input,
+               activebackground=bg_panel, activeforeground=fg_main,
+               font=("Segoe UI", 9)).pack(anchor=tk.W)
 
 # === BOTTOM ROW: Chart | Controls | Console ===
 bottom_row = tk.Frame(main_container, bg=bg_main)
@@ -1601,14 +1540,14 @@ def show_tips():
         "\n"
         "DRIFT CHECK:\n"
         "  • Uses the start clip + last 30s of the file\n"
-        "  • Stretch factor goes into MKVToolNix\n"
+        "  • Stretch factor corrects progressive desync\n"
         "  • Values < 1.0 slow the audio, > 1.0 speed it up\n"
         "\n"
         "OFFSET SIGN CONVENTION:\n"
         "  • Positive offset → target is delayed\n"
-        "    set a negative delay in MKVToolNix\n"
+        "    set a negative delay\n"
         "  • Negative offset → target is ahead\n"
-        "    set a positive delay in MKVToolNix"
+        "    set a positive delay"
     )
 
     txt = tk.Label(popup, text=tips_content,
@@ -1682,7 +1621,6 @@ console_text.tag_config("warn",  foreground="#ffaa44")
 console_text.tag_config("error", foreground="#ff5555")
 console_text.tag_config("cmd",   foreground="#4a9eff")
 console_text.tag_config("bold",    foreground="#ffffff")
-console_text.tag_config("spinner", foreground="#4a9eff")
 
 # Register this widget so console_log() writes to it
 _console_widgets.append(console_text)

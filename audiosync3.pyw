@@ -127,6 +127,35 @@ def show_startup_error(title, message):
         pass
 
 
+def dark_info_dialog(title: str, message: str) -> None:
+    """Dark-themed modal info dialog to replace messagebox.showinfo."""
+    popup = tk.Toplevel(root)
+    popup.title(title)
+    popup.configure(bg="#1a1a1a")
+    popup.resizable(False, False)
+    popup.update()
+    _apply_dark_titlebar(popup)
+
+    tk.Label(popup, text=title, bg="#1a1a1a", fg="#4a9eff",
+             font=("Segoe UI", 11, "bold")).pack(padx=24, pady=(18, 10))
+
+    tk.Label(popup, text=message, bg="#1a1a1a", fg="#cccccc",
+             font=("Segoe UI", 9), justify=tk.LEFT, anchor=tk.W).pack(
+             padx=24, pady=(0, 16), anchor=tk.W)
+
+    tk.Button(popup, text="OK", command=popup.destroy,
+              bg="#2a7de1", fg="#ffffff", relief=tk.FLAT,
+              font=("Segoe UI", 9, "bold"), cursor="hand2",
+              activebackground="#3d8bff",
+              padx=30, pady=6).pack(pady=(0, 18))
+
+    popup.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width()  - popup.winfo_width())  // 2
+    y = root.winfo_y() + (root.winfo_height() - popup.winfo_height()) // 2
+    popup.geometry(f"+{x}+{y}")
+    popup.grab_set()
+
+
 # ---------------------------------------------------------------------------
 # PYTHON PACKAGE DEPENDENCY CHECK
 # FFmpeg is checked later inside the GUI after startup so the user can see
@@ -877,7 +906,7 @@ def export_drift_corrected() -> None:
             _os.remove(tmp_wav)
             root.after(0, lambda: set_progress(100, "Export done"))
             console_log(f"✓ Saved: {out_path}", "ok")
-            root.after(0, lambda: messagebox.showinfo("Done",
+            root.after(0, lambda: dark_info_dialog("Done",
                 f"Drift-corrected audio saved:\n{out_path}\n\n"
                 f"Codec: {detected_codec}  Bitrate: {detected_bitrate}\n"
                 f"atempo: {atempo}  delay: {init_off:+.1f} ms"))
@@ -1273,8 +1302,22 @@ progress_label = tk.Label(_status_row, text="", bg="#111111", fg="#888888",
                            font=("Segoe UI", 8), anchor=tk.W)
 progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+# Dark-themed progress bar via ttk.Style
+_pb_style = ttk.Style(root)
+_pb_style.theme_use("default")
+_pb_style.configure(
+    "Dark.Horizontal.TProgressbar",
+    troughcolor="#1a1a1a",
+    background="#2a7de1",
+    bordercolor="#1a1a1a",
+    lightcolor="#2a7de1",
+    darkcolor="#2a7de1",
+    thickness=6,
+)
+
 progress_bar = ttk.Progressbar(root, variable=progress_var,
-                                maximum=100, mode='determinate')
+                                maximum=100, mode='determinate',
+                                style="Dark.Horizontal.TProgressbar")
 progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
 

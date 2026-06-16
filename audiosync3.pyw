@@ -775,29 +775,23 @@ def export_drift_corrected() -> None:
     if not check_ffmpeg_before_analyze():
         return
 
-    # Need drift result – check label has the values
-    res_text = label_result.cget("text")
-    if "atempo" not in res_text and "stretch" not in res_text.lower():
-        messagebox.showerror("Error",
-            "Run analysis with \'Check drift\' enabled first.")
-        return
-
-    # Read atempo and initial offset from the result label via stored attributes
-    # They were set during drift calculation in _drift_update_calculated or
-    # directly in analyze_sync. We store them on label_result for retrieval.
+    # Need drift result – check attributes set by analysis or manual drift calc
     try:
         atempo   = label_result._atempo
         init_off = label_result._init_off   # ms, signed
         offset_ms_start = label_result._offset_ms  # initial static offset
     except AttributeError:
         messagebox.showerror("Error",
-            "Drift values not available.\nRun analysis with \'Check drift\' enabled.")
+            "No drift values available.\nRun analysis with 'Check drift' or use Manual drift.")
         return
 
-    ref_file   = ref_var.get()
-    target_path = entry_file2.get() if ref_file == 1 else entry_file1.get()
+    ref_file    = ref_var.get()
+    target_path = entry_file2.get().strip() if ref_file == 1 else entry_file1.get().strip()
+    # Fallback: if target slot is empty, use whichever file is filled in
     if not target_path:
-        messagebox.showerror("Error", "No target file selected.")
+        target_path = entry_file1.get().strip() or entry_file2.get().strip()
+    if not target_path:
+        messagebox.showerror("Error", "No file selected.")
         return
 
     # Detect original codec, bitrate, channels and sample rate via ffprobe
@@ -856,23 +850,6 @@ def export_drift_corrected() -> None:
     if not out_path:
         return
 
-    import tempfile as _tmp
-    tmp_wav = _os.path.join(_tmp.gettempdir(), "driftfix_tmp.wav")
-
-    # ── Step 1: atempo + offset → lossless WAV ───────────────────────────────
-    if init_off >= 0:
-        delay_ms = int(round(init_off))
-        af1 = f"adelay={delay_ms}|{delay_ms},atempo={atempo}" if delay_ms > 0 else f"atempo={atempo}"
-        cmd1 = ["ffmpeg", "-y", "-i", target_path,
-                "-vn", "-map", "0:a:0", "-af", af1,
-                "-c:a", "pcm_s16le", tmp_wav]
-    else:
-        trim_s = abs(init_off) / 1000.0
-        af1 = f"atempo={atempo}"
-        cmd1 = ["ffmpeg", "-y", "-ss", str(trim_s), "-i", target_path,
-                "-vn", "-map", "0:a:0", "-af", af1,
-                "-c:a", "pcm_s16le", tmp_wav]
-
     # Build extra args to preserve original channel count and sample rate
     _preserve = []
     if detected_channels:
@@ -880,36 +857,36 @@ def export_drift_corrected() -> None:
     if detected_samplerate:
         _preserve += ["-ar", str(detected_samplerate)]
 
+    # Single-pass: decode → atempo → encode, no intermediate WAV needed
     if encoder in ("flac", "pcm_s16le"):
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder, out_path]
+        cmd = ["ffmpeg", "-y", "-i", target_path,
+               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
+        cmd += _preserve + ["-c:a", encoder, out_path]
     elif encoder in ("libopus", "libvorbis"):
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
-                "-b:a", detected_bitrate, out_path]
+        cmd = ["ffmpeg", "-y", "-i", target_path,
+               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
+        cmd += _preserve + ["-c:a", encoder, "-b:a", detected_bitrate, out_path]
     else:
-        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
-                "-b:a", detected_bitrate, out_path]
+        cmd = ["ffmpeg", "-y", "-i", target_path,
+               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
+        cmd += _preserve + ["-c:a", encoder, "-b:a", detected_bitrate, out_path]
 
     _ch_str = f"  {detected_channels}ch" if detected_channels else ""
     _sr_str = f"  {detected_samplerate}Hz" if detected_samplerate else ""
-    console_log(f"Step 1/2  atempo={atempo}  init_off={init_off:+.1f} ms → WAV", "bold")
-    console_log("ffmpeg " + " ".join(cmd1[1:]), "cmd")
-    console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
-    console_log("ffmpeg " + " ".join(cmd2[1:]), "cmd")
+    console_log(f"Exporting: atempo={atempo} → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
+    console_log("ffmpeg " + " ".join(cmd[1:]), "cmd")
 
     def _do_export():
         try:
-            root.after(0, lambda: set_progress(10, "Step 1: applying atempo..."))
-            _run_ffmpeg(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
-            console_log("Step 1 done", "ok")
-            root.after(0, lambda: set_progress(60, "Step 2: encoding..."))
-            _run_ffmpeg(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
-            _os.remove(tmp_wav)
+            root.after(0, lambda: set_progress(10, "Encoding..."))
+            _run_ffmpeg(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
             root.after(0, lambda: set_progress(100, "Export done"))
             console_log(f"✓ Saved: {out_path}", "ok")
             root.after(0, lambda: dark_info_dialog("Done",
                 f"Drift-corrected audio saved:\n{out_path}\n\n"
                 f"Codec: {detected_codec}  Bitrate: {detected_bitrate}\n"
-                f"atempo: {atempo}  delay: {init_off:+.1f} ms"))
+                f"atempo: {atempo}\n\n"
+                f"Static delay ({init_off:+.1f} ms) – set in muxer manually."))
         except subprocess.CalledProcessError as e:
             _rc = e.returncode
             console_log(f"Export failed (exit {_rc})", "error")
@@ -1139,26 +1116,25 @@ def _analyze_sync_impl() -> None:
         total_offset_ms = round(offset_ms + preoffset_diff_ms, 2)
 
         # Build the human-readable result string
-        offset_display = offset_ms
         if offset_ms == 0:
-            res   = "✓ Files perfectly synchronized"
+            res   = "✓ In sync"
             color = "#00ff88"
         elif offset_ms > 0:
-            res   = f"● {target_name} delayed by {offset_ms} ms"
+            res   = f"▶ {target_name} late by {offset_ms} ms"
             color = "#ffa500"
         else:
-            res   = f"● {target_name} ahead by {abs(offset_ms)} ms"
+            res   = f"◀ {target_name} early by {abs(offset_ms)} ms"
             color = "#ff6b6b"
 
         # Pre-offset correction
         if preoffset1 != 0 or preoffset2 != 0:
-            res += f"\n  (total with pre-offsets: {total_offset_ms:+.2f} ms)"
+            res += f"\n  (total: {total_offset_ms:+.2f} ms)"
 
-        # MKVToolNix instruction for the offset
+        # Delay instruction
         if offset_ms != 0:
-            mkv_delay = -offset_ms if offset_ms > 0 else abs(offset_ms)
+            mkv_delay = round(-offset_ms if offset_ms > 0 else abs(offset_ms))
             mkv_sign  = "+" if mkv_delay >= 0 else ""
-            res += f"\n\nDelay {target_name}:  {mkv_sign}{mkv_delay} ms"
+            res += f"\n\nDelay {target_name}: {mkv_sign}{mkv_delay} ms"
 
         # ── Optional drift check ─────────────────────────────────────────────
         if check_drift_var.get():
@@ -1177,34 +1153,31 @@ def _analyze_sync_impl() -> None:
                         root.after(0, lambda: set_progress(72, "Drift check..."))
                         offset_ms_t2_raw = _run_correlation(file1, file2, t2 + preoffset1_v, t2 + preoffset2_v, clip_dur)
                         offset_ms_t2 = round(-offset_ms_t2_raw if ref_file == 1 else offset_ms_t2_raw, 2)
-                        dt_s       = t2 - t1
-                        d_off      = offset_ms_t2 - offset_ms
+                        dt_s        = t2 - t1
+                        d_off       = offset_ms_t2 - offset_ms
                         drift_rate  = d_off / dt_s
                         atempo      = round(1.0 - drift_rate / 1000.0, 8)
                         stretch_pct = round((atempo - 1.0) * 100, 6)
                         init_off    = round(offset_ms - drift_rate * t1, 2)
 
                         if abs(drift_rate) < 0.05:
-                            res += "\n\n● No significant drift detected."
+                            res += "\n\nNo significant drift."
                             console_log(f"Drift: {drift_rate:+.4f} ms/s – negligible", "ok")
                         else:
-                            mkv_delay_str = f"{'-' if offset_ms > 0 else '+'}{abs(offset_ms)}"
                             res += (
-                                f"\n\n● Drift detected  ({drift_rate:+.4f} ms/s)"
-                                f"\n\nDelay {target_name}:"
-                                f"\n  delay:          {mkv_delay_str} ms"
-                                f"\n  stretch factor: {atempo:.8f}"
-                                f"\n  stretch %:      {stretch_pct:+.6f}%"
+                                f"\n\nDrift: {drift_rate:+.4f} ms/s"
+                                f"\natempo: {atempo:.8f}"
+                                f"\nInit offset: {round(init_off):+d} ms"
                             )
-                            console_log(f"Drift: {drift_rate:+.4f} ms/s  stretch={atempo:.8f}", "warn")
-                            _drift_atempo_tmp   = atempo
-                            _drift_initoff_tmp  = init_off if "init_off" in dir() else float(offset_ms)
+                            console_log(f"Drift: {drift_rate:+.4f} ms/s  atempo={atempo:.8f}", "warn")
+                            _drift_atempo_tmp  = atempo
+                            _drift_initoff_tmp = init_off
                     else:
-                        res += "\n\n● Drift check skipped (points too close)."
+                        res += "\n\nDrift check skipped (points too close)."
                 else:
-                    res += "\n\n● Drift check skipped (file too short)."
+                    res += "\n\nDrift check skipped (file too short)."
             except Exception as drift_err:
-                res += f"\n\n● Drift check failed: {drift_err}"
+                res += f"\n\nDrift check failed: {drift_err}"
                 console_log(f"Drift check error: {drift_err}", "error")
 
         # Store drift values on label_result for export_drift_corrected()
@@ -1477,8 +1450,27 @@ control_panel = tk.LabelFrame(bottom_row, text=" Controls ", bg=bg_panel, fg=fg_
 control_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 control_panel.pack_propagate(False)
 
-controls_inner = tk.Frame(control_panel, bg=bg_panel)
-controls_inner.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+# Scrollable controls panel – mousewheel only, no visible scrollbar
+_ctrl_canvas = tk.Canvas(control_panel, bg=bg_panel, highlightthickness=0)
+_ctrl_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
+
+controls_inner = tk.Frame(_ctrl_canvas, bg=bg_panel)
+_ctrl_window = _ctrl_canvas.create_window((0, 0), window=controls_inner, anchor=tk.NW)
+
+def _on_ctrl_configure(event):
+    _ctrl_canvas.configure(scrollregion=_ctrl_canvas.bbox("all"))
+
+controls_inner.bind("<Configure>", _on_ctrl_configure)
+_ctrl_canvas.bind("<Configure>", lambda e: _ctrl_canvas.itemconfig(_ctrl_window, width=e.width))
+
+def _on_ctrl_mousewheel(event):
+    _ctrl_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+def _ctrl_enter(e):  _ctrl_canvas.bind_all("<MouseWheel>", _on_ctrl_mousewheel)
+def _ctrl_leave(e):  _ctrl_canvas.unbind_all("<MouseWheel>")
+
+_ctrl_canvas.bind("<Enter>", _ctrl_enter)
+_ctrl_canvas.bind("<Leave>", _ctrl_leave)
 
 # ANALYZE BUTTON
 btn_analyze = tk.Button(controls_inner, text="⚡ ANALYZE", command=analyze_sync,
@@ -1548,6 +1540,87 @@ tk.Label(manual_section, text="(in milliseconds)", bg=bg_panel, fg="#666666",
 # SEPARATOR
 tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
 
+# MANUAL DRIFT
+manual_drift_section = tk.Frame(controls_inner, bg=bg_panel)
+manual_drift_section.pack(fill=tk.X, pady=(0, 15))
+
+tk.Label(manual_drift_section, text="📐 Manual drift:", bg=bg_panel, fg=fg_dim,
+         font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 6))
+
+# Point 1
+md_row1 = tk.Frame(manual_drift_section, bg=bg_panel)
+md_row1.pack(fill=tk.X, pady=(0, 3))
+tk.Label(md_row1, text="Time 1:", bg=bg_panel, fg=fg_dim,
+         font=("Segoe UI", 8), width=6).pack(side=tk.LEFT)
+md_entry_t1 = tk.Entry(md_row1, bg=bg_input, fg=fg_main, insertbackground="white",
+                        relief=tk.FLAT, font=("Segoe UI", 9), width=9, justify=tk.CENTER)
+md_entry_t1.insert(0, "")
+md_entry_t1.pack(side=tk.LEFT, ipady=4, padx=(0, 4))
+tk.Label(md_row1, text="Offset:", bg=bg_panel, fg=fg_dim,
+         font=("Segoe UI", 8)).pack(side=tk.LEFT)
+md_entry_off1 = tk.Entry(md_row1, bg=bg_input, fg=fg_main, insertbackground="white",
+                          relief=tk.FLAT, font=("Segoe UI", 9), width=7, justify=tk.CENTER)
+md_entry_off1.insert(0, "")
+md_entry_off1.pack(side=tk.LEFT, ipady=4, padx=(2, 0))
+tk.Label(md_row1, text="ms", bg=bg_panel, fg="#666666",
+         font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(2, 0))
+
+# Point 2
+md_row2 = tk.Frame(manual_drift_section, bg=bg_panel)
+md_row2.pack(fill=tk.X, pady=(0, 6))
+tk.Label(md_row2, text="Time 2:", bg=bg_panel, fg=fg_dim,
+         font=("Segoe UI", 8), width=6).pack(side=tk.LEFT)
+md_entry_t2 = tk.Entry(md_row2, bg=bg_input, fg=fg_main, insertbackground="white",
+                        relief=tk.FLAT, font=("Segoe UI", 9), width=9, justify=tk.CENTER)
+md_entry_t2.insert(0, "")
+md_entry_t2.pack(side=tk.LEFT, ipady=4, padx=(0, 4))
+tk.Label(md_row2, text="Offset:", bg=bg_panel, fg=fg_dim,
+         font=("Segoe UI", 8)).pack(side=tk.LEFT)
+md_entry_off2 = tk.Entry(md_row2, bg=bg_input, fg=fg_main, insertbackground="white",
+                          relief=tk.FLAT, font=("Segoe UI", 9), width=7, justify=tk.CENTER)
+md_entry_off2.insert(0, "")
+md_entry_off2.pack(side=tk.LEFT, ipady=4, padx=(2, 0))
+tk.Label(md_row2, text="ms", bg=bg_panel, fg="#666666",
+         font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(2, 0))
+
+md_lbl_result = tk.Label(manual_drift_section, text="", bg=bg_panel, fg="#00cc66",
+                          font=("Segoe UI", 8), anchor=tk.W, justify=tk.LEFT, wraplength=255)
+md_lbl_result.pack(fill=tk.X, pady=(0, 4))
+
+def calc_manual_drift():
+    try:
+        t1  = to_seconds(md_entry_t1.get().strip())
+        t2  = to_seconds(md_entry_t2.get().strip())
+        o1  = float(md_entry_off1.get().strip())
+        o2  = float(md_entry_off2.get().strip())
+        dt  = t2 - t1
+        if abs(dt) < 1.0:
+            md_lbl_result.config(text="Points too close.", fg="#ffaa44")
+            return
+        drift_rate  = (o2 - o1) / dt
+        atempo_val  = round(1.0 - drift_rate / 1000.0, 8)
+        init_off    = round(o1 - drift_rate * t1)
+        stretch_pct = round((atempo_val - 1.0) * 100, 6)
+        md_lbl_result.config(
+            text=(f"drift: {drift_rate:+.4f} ms/s\n"
+                  f"atempo: {atempo_val:.8f}\n"
+                  f"init offset: {init_off:+d} ms"),
+            fg="#00cc66")
+        # Store on label_result so Export can use them directly
+        label_result._atempo   = atempo_val
+        label_result._init_off = float(init_off)
+        label_result._offset_ms = float(init_off)
+        console_log(f"Manual drift: {drift_rate:+.4f} ms/s  atempo={atempo_val:.8f}  init={init_off:+d} ms", "ok")
+    except ValueError:
+        md_lbl_result.config(text="Invalid input.", fg="#ff5555")
+
+tk.Button(manual_drift_section, text="Calculate", command=calc_manual_drift,
+          bg=btn_primary, fg=fg_main, relief=tk.FLAT, cursor="hand2",
+          font=("Segoe UI", 9, "bold"), activebackground=btn_hover).pack(fill=tk.X, ipady=5)
+
+# SEPARATOR
+tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
+
 # EXPORT DRIFT-CORRECTED AUDIO
 tk.Button(controls_inner, text="⬇ Export Drift-Corrected Audio",
           command=export_drift_corrected,
@@ -1559,38 +1632,42 @@ tk.Button(controls_inner, text="⬇ Export Drift-Corrected Audio",
 def show_tips():
     """Show a popup with usage tips."""
     popup = tk.Toplevel(root)
-    popup.title("Tips")
+    popup.title("Help")
     popup.configure(bg="#1a1a1a")
     popup.resizable(False, False)
     popup.update()
     _apply_dark_titlebar(popup)
 
-    tk.Label(popup, text="💡 Tips for best results",
+    tk.Label(popup, text="❓ Help",
              bg="#1a1a1a", fg="#4a9eff",
              font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 8))
 
     tips_content = (
-        "SELECT clips with:\n"
-        "  • Clear speech or music\n"
-        "  • Single language\n"
-        "  • Sharp transients (claps, hits, drums)\n"
-        "  • 30–60 seconds for best accuracy\n"
+        "RESULTS EXPLAINED:\n"
+        "  Delay X ms    – apply as delay in your muxer\n"
+        "  Drift ms/s    – desync growth rate per second\n"
+        "  atempo        – audio speed factor for export\n"
+        "  Init offset   – offset at t=0, set as delay in muxer\n"
         "\n"
-        "AVOID:\n"
-        "  • Long silences or ambient noise only\n"
-        "  • Multilingual or heavily overlapping voices\n"
-        "  • Very quiet sections\n"
+        "DELAY SIGN:\n"
+        "  Target late  → negative delay\n"
+        "  Target early → positive delay\n"
+        "\n"
+        "FOR BEST ACCURACY:\n"
+        "  • Pick a clip with clear speech or sharp sounds\n"
+        "  • 30–60 seconds duration recommended\n"
+        "  • Avoid silence, ambient noise, or multilingual audio\n"
         "\n"
         "DRIFT CHECK:\n"
-        "  • Uses the start clip + last 30s of the file\n"
-        "  • Stretch factor corrects progressive desync\n"
-        "  • Values < 1.0 slow the audio, > 1.0 speed it up\n"
+        "  • Measures offset at start and near end of file\n"
+        "  • Detects progressive desync growing over time\n"
+        "  • Use Export to apply atempo correction\n"
         "\n"
-        "OFFSET SIGN CONVENTION:\n"
-        "  • Positive offset → target is delayed\n"
-        "    set a negative delay\n"
-        "  • Negative offset → target is ahead\n"
-        "    set a positive delay"
+        "MANUAL DRIFT:\n"
+        "  • Enter two known timestamps with their offsets\n"
+        "  • Works on a single file, no reference needed\n"
+        "  • If audio starts in sync: t=0, offset=0 as first point\n"
+        "  • Click Calculate → then Export"
     )
 
     txt = tk.Label(popup, text=tips_content,
@@ -1611,7 +1688,7 @@ def show_tips():
     popup.geometry(f"+{x}+{y}")
     popup.grab_set()
 
-tk.Button(controls_inner, text="💡 Tips", command=show_tips,
+tk.Button(controls_inner, text="❓ Help", command=show_tips,
           bg="#333333", fg=fg_dim, relief=tk.FLAT, cursor="hand2",
           font=("Segoe UI", 9), activebackground="#444444").pack(fill=tk.X, ipady=6)
 

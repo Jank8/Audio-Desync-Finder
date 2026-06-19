@@ -850,6 +850,10 @@ def export_drift_corrected() -> None:
     if not out_path:
         return
 
+    import tempfile as _tmp
+    import os as _os2
+    tmp_wav = _os.path.join(_tmp.gettempdir(), "driftfix_tmp.wav")
+
     # Build extra args to preserve original channel count and sample rate
     _preserve = []
     if detected_channels:
@@ -857,36 +861,65 @@ def export_drift_corrected() -> None:
     if detected_samplerate:
         _preserve += ["-ar", str(detected_samplerate)]
 
-    # Single-pass: decode → atempo → encode, no intermediate WAV needed
-    if encoder in ("flac", "pcm_s16le"):
-        cmd = ["ffmpeg", "-y", "-i", target_path,
-               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
-        cmd += _preserve + ["-c:a", encoder, out_path]
-    elif encoder in ("libopus", "libvorbis"):
-        cmd = ["ffmpeg", "-y", "-i", target_path,
-               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
-        cmd += _preserve + ["-c:a", encoder, "-b:a", detected_bitrate, out_path]
+    # Two-pass: decode → atempo → lossless WAV, then WAV → target codec
+    # WAV intermediate ensures atempo operates on clean PCM without codec
+    # buffering artifacts that can affect timing precision.
+    # init_off applies the static offset at t=0 (capped at ±60s to guard against bad values)
+    _safe_init_off = init_off if abs(init_off) <= 60000 else 0
+    if _safe_init_off > 0:
+        delay_ms = int(round(_safe_init_off))
+        af1 = f"adelay={delay_ms}|{delay_ms}|{delay_ms}|{delay_ms}|{delay_ms}|{delay_ms},atempo={atempo}"
+    elif _safe_init_off < 0:
+        trim_s = abs(_safe_init_off) / 1000.0
+        af1 = f"atempo={atempo}"
     else:
-        cmd = ["ffmpeg", "-y", "-i", target_path,
-               "-vn", "-map", "0:a:0", "-af", f"atempo={atempo}"]
-        cmd += _preserve + ["-c:a", encoder, "-b:a", detected_bitrate, out_path]
+        af1 = f"atempo={atempo}"
+
+    if _safe_init_off < 0:
+        cmd1 = ["ffmpeg", "-y", "-ss", str(abs(_safe_init_off) / 1000.0), "-i", target_path,
+                "-vn", "-map", "0:a:0", "-af", af1]
+    else:
+        cmd1 = ["ffmpeg", "-y", "-i", target_path,
+                "-vn", "-map", "0:a:0", "-af", af1]
+    cmd1 += _preserve + ["-c:a", "pcm_s16le", tmp_wav]
+
+    if encoder in ("flac", "pcm_s16le"):
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder, out_path]
+    elif encoder in ("libopus", "libvorbis"):
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
+                "-b:a", detected_bitrate, out_path]
+    else:
+        cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
+                "-b:a", detected_bitrate, out_path]
 
     _ch_str = f"  {detected_channels}ch" if detected_channels else ""
     _sr_str = f"  {detected_samplerate}Hz" if detected_samplerate else ""
-    console_log(f"Exporting: atempo={atempo} → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
-    console_log("ffmpeg " + " ".join(cmd[1:]), "cmd")
+    _off_str = f"  offset={_safe_init_off:+.0f}ms" if _safe_init_off != 0 else "  no offset trim"
+    console_log(f"Step 1/2  atempo={atempo}{_off_str} → WAV", "bold")
+    console_log("ffmpeg " + " ".join(cmd1[1:]), "cmd")
+    console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
+    console_log("ffmpeg " + " ".join(cmd2[1:]), "cmd")
 
     def _do_export():
         try:
-            root.after(0, lambda: set_progress(10, "Encoding..."))
-            _run_ffmpeg(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
+            root.after(0, lambda: set_progress(10, "Step 1: applying correction..."))
+            _run_ffmpeg(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
+            console_log("Step 1 done", "ok")
+            root.after(0, lambda: set_progress(60, "Step 2: encoding..."))
+            _run_ffmpeg(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=get_startupinfo())
+            try:
+                _os.remove(tmp_wav)
+            except Exception:
+                pass
             root.after(0, lambda: set_progress(100, "Export done"))
             console_log(f"✓ Saved: {out_path}", "ok")
-            root.after(0, lambda: dark_info_dialog("Done",
-                f"Drift-corrected audio saved:\n{out_path}\n\n"
+            _off_info = f"Offset correction: {_safe_init_off:+.0f} ms (baked in)" if _safe_init_off != 0 else "No offset correction applied"
+            root.after(0, lambda: dark_info_dialog("Export complete",
+                f"File saved:\n{out_path}\n\n"
                 f"Codec: {detected_codec}  Bitrate: {detected_bitrate}\n"
-                f"atempo: {atempo}\n\n"
-                f"Static delay ({init_off:+.1f} ms) – set in muxer manually."))
+                f"Drift correction: atempo={atempo}\n"
+                f"{_off_info}\n\n"
+                f"Ready to mux – no further delay needed."))
         except subprocess.CalledProcessError as e:
             _rc = e.returncode
             console_log(f"Export failed (exit {_rc})", "error")
@@ -1135,6 +1168,7 @@ def _analyze_sync_impl() -> None:
             mkv_delay = round(-offset_ms if offset_ms > 0 else abs(offset_ms))
             mkv_sign  = "+" if mkv_delay >= 0 else ""
             res += f"\n\nDelay {target_name}: {mkv_sign}{mkv_delay} ms"
+            res += f"\n(muxer delay if not exporting)"
 
         # ── Optional drift check ─────────────────────────────────────────────
         if check_drift_var.get():
@@ -1160,14 +1194,15 @@ def _analyze_sync_impl() -> None:
                         stretch_pct = round((atempo - 1.0) * 100, 6)
                         init_off    = round(offset_ms - drift_rate * t1, 2)
 
-                        if abs(drift_rate) < 0.05:
+                        if abs(drift_rate) < 0.1:
                             res += "\n\nNo significant drift."
                             console_log(f"Drift: {drift_rate:+.4f} ms/s – negligible", "ok")
                         else:
                             res += (
-                                f"\n\nDrift: {drift_rate:+.4f} ms/s"
+                                f"\n\nDrift detected: {drift_rate:+.4f} ms/s"
                                 f"\natempo: {atempo:.8f}"
-                                f"\nInit offset: {round(init_off):+d} ms"
+                                f"\nOffset at t=0: {round(init_off):+d} ms"
+                                f"\n→ Use Export to apply both corrections"
                             )
                             console_log(f"Drift: {drift_rate:+.4f} ms/s  atempo={atempo:.8f}", "warn")
                             _drift_atempo_tmp  = atempo
@@ -1644,14 +1679,18 @@ def show_tips():
 
     tips_content = (
         "RESULTS EXPLAINED:\n"
-        "  Delay X ms    – apply as delay in your muxer\n"
+        "  X late/early  – measured offset at analysis point\n"
+        "  Delay X ms    – apply as delay in muxer/player to fix sync\n"
+        "                  positive = shift audio forward in time\n"
         "  Drift ms/s    – desync growth rate per second\n"
-        "  atempo        – audio speed factor for export\n"
-        "  Init offset   – offset at t=0, set as delay in muxer\n"
+        "  atempo        – speed correction factor\n"
+        "  Offset at t=0 – starting offset baked into exported file\n"
         "\n"
-        "DELAY SIGN:\n"
-        "  Target late  → negative delay\n"
-        "  Target early → positive delay\n"
+        "WORKFLOW:\n"
+        "  1. Run analysis without Drift Check first\n"
+        "  2. Verify the offset is correct\n"
+        "  3. If sync drifts over time, enable Drift Check and re-run\n"
+        "  4. Use Export to apply corrections\n"
         "\n"
         "FOR BEST ACCURACY:\n"
         "  • Pick a clip with clear speech or sharp sounds\n"
@@ -1661,7 +1700,7 @@ def show_tips():
         "DRIFT CHECK:\n"
         "  • Measures offset at start and near end of file\n"
         "  • Detects progressive desync growing over time\n"
-        "  • Use Export to apply atempo correction\n"
+        "  • Use Export to apply full correction\n"
         "\n"
         "MANUAL DRIFT:\n"
         "  • Enter two known timestamps with their offsets\n"

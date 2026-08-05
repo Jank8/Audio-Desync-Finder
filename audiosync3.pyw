@@ -1288,6 +1288,24 @@ def _analyze_sync_impl() -> None:
                         times_arr = np.array(times)
                         offsets_arr = np.array(offsets)
                         
+                        # Detect outliers using IQR method
+                        q1, q3 = np.percentile(offsets_arr, [25, 75])
+                        iqr = q3 - q1
+                        outlier_threshold = 3.0  # How many IQRs away to consider outlier
+                        lower_bound = q1 - outlier_threshold * iqr
+                        upper_bound = q3 + outlier_threshold * iqr
+                        
+                        outliers = []
+                        for i, offset in enumerate(offsets):
+                            if offset < lower_bound or offset > upper_bound:
+                                outliers.append((i+1, times[i], offset))
+                        
+                        if outliers:
+                            console_log(f"WARNING: {len(outliers)} outlier(s) detected:", "warn")
+                            for pt_num, t, offset in outliers:
+                                console_log(f"  Point {pt_num} (t={t:.1f}s): {offset:+.2f} ms", "warn")
+                            console_log("  These points may have silence, noise, or poor correlation", "warn")
+                        
                         # y = drift_rate * x + intercept
                         # Using least squares fit for drift rate
                         A = np.vstack([times_arr, np.ones(len(times_arr))]).T
@@ -1307,6 +1325,13 @@ def _analyze_sync_impl() -> None:
                         
                         console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, R²={r_squared:.4f}", "ok")
                         console_log(f"Initial offset: {init_off:+.2f} ms (measured at t={times[0]:.1f}s)", "ok")
+                        
+                        # Warn if R² is too low (poor linear fit)
+                        if r_squared < 0.8:
+                            console_log(f"WARNING: Low R² ({r_squared:.3f}) - drift may not be linear or measurements inconsistent", "warn")
+                            res += f"\n\n⚠️ WARNING: Low fit quality (R²={r_squared:.3f})"
+                            res += f"\nDrift may not be linear or some measurements are poor."
+                            res += f"\nConsider checking problematic time points manually."
                         
                         if abs(drift_rate) < 0.1:
                             res += f"\n\nNo significant drift (< 0.1 ms/s)."

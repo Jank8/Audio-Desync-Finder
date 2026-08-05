@@ -508,11 +508,20 @@ def _drift_update_calculated() -> None:
         return
     drift_rate = d_off / dt_s
     atempo     = round(1.0 - drift_rate/1000.0, 8)
-    init_off   = round(p1["offset_ms"] - drift_rate*p1["time_s"], 2)
+    
+    # If first point is near the start (t < 30s), use it directly as initial offset
+    # Otherwise extrapolate back to t=0
+    if p1["time_s"] < 30:
+        init_off = round(p1["offset_ms"], 2)
+        init_time_label = f"(at t={p1['time_s']:.1f}s)"
+    else:
+        init_off = round(p1["offset_ms"] - drift_rate * p1["time_s"], 2)
+        init_time_label = "(extrapolated to t=0)"
+    
     drift_lbl_calc.config(
         text=(f"Drift rate:  {drift_rate:+.4f} ms/s\n"
               f"atempo:      {atempo:.8f}\n"
-              f"Init offset: {init_off:+.2f} ms  (at t=0)"),
+              f"Init offset: {init_off:+.2f} ms  {init_time_label}"),
         fg="#00cc66")
     drift_lbl_calc._atempo         = atempo
     drift_lbl_calc._initial_offset = init_off
@@ -797,8 +806,9 @@ def export_drift_corrected() -> None:
     # Detect original codec, bitrate, channels and sample rate via ffprobe
     detected_codec      = "ac3"
     detected_bitrate    = "256k"
-    detected_channels   = None   # None = let ffmpeg decide (preserves source)
-    detected_samplerate = None
+    detected_channels   = 2       # Default to stereo if detection fails
+    detected_samplerate = 48000   # Default to 48kHz if detection fails
+    
     try:
         import json
         probe = subprocess.run(
@@ -818,8 +828,8 @@ def export_drift_corrected() -> None:
             detected_channels = int(stream["channels"])
         if stream.get("sample_rate"):
             detected_samplerate = int(stream["sample_rate"])
-    except Exception:
-        pass
+    except Exception as e:
+        console_log(f"Warning: Could not detect audio parameters, using defaults. {e}", "warn")
 
     # Map codec → ffmpeg encoder and container extension
     _codec_map = {
@@ -854,34 +864,61 @@ def export_drift_corrected() -> None:
     import os as _os2
     tmp_wav = _os.path.join(_tmp.gettempdir(), "driftfix_tmp.wav")
 
-    # Build extra args to preserve original channel count and sample rate
-    _preserve = []
-    if detected_channels:
-        _preserve += ["-ac", str(detected_channels)]
-    if detected_samplerate:
-        _preserve += ["-ar", str(detected_samplerate)]
+    # Always preserve original channel count and sample rate
+    _preserve = ["-ac", str(detected_channels), "-ar", str(detected_samplerate)]
 
     # Two-pass: decode → atempo → lossless WAV, then WAV → target codec
     # WAV intermediate ensures atempo operates on clean PCM without codec
     # buffering artifacts that can affect timing precision.
     # init_off applies the static offset at t=0 (capped at ±60s to guard against bad values)
     _safe_init_off = init_off if abs(init_off) <= 60000 else 0
+    
+    # Only apply atempo if it's significantly different from 1.0
+    # (drift rate >= 0.1 ms/s, which is the threshold used during analysis)
+    apply_atempo = abs(atempo - 1.0) >= 0.0001  # corresponds to ~0.1 ms/s drift
+    
     if _safe_init_off > 0:
+        # Positive offset: add delay at the start
         delay_ms = int(round(_safe_init_off))
-        af1 = f"adelay={delay_ms}|{delay_ms}|{delay_ms}|{delay_ms}|{delay_ms}|{delay_ms},atempo={atempo}"
+        # Build adelay filter with correct number of channels
+        # adelay syntax: delay_ch0|delay_ch1|... (one value per channel)
+        delay_spec = "|".join([str(delay_ms)] * detected_channels)
+        if apply_atempo:
+            af1 = f"adelay={delay_spec},atempo={atempo}"
+        else:
+            af1 = f"adelay={delay_spec}"
     elif _safe_init_off < 0:
-        trim_s = abs(_safe_init_off) / 1000.0
-        af1 = f"atempo={atempo}"
+        # Negative offset: trim from start (handled via -ss flag below)
+        if apply_atempo:
+            af1 = f"atempo={atempo}"
+        else:
+            af1 = None  # No filters needed
     else:
-        af1 = f"atempo={atempo}"
+        # No offset correction needed
+        if apply_atempo:
+            af1 = f"atempo={atempo}"
+        else:
+            af1 = None  # No filters needed
 
+    # Build the complete command for step 1
+    # Order matters: input → map → decode params (ac/ar) → filters → encode
     if _safe_init_off < 0:
+        # Negative offset: seek to start point
         cmd1 = ["ffmpeg", "-y", "-ss", str(abs(_safe_init_off) / 1000.0), "-i", target_path,
-                "-vn", "-map", "0:a:0", "-af", af1]
+                "-vn", "-map", "0:a:0"]
     else:
-        cmd1 = ["ffmpeg", "-y", "-i", target_path,
-                "-vn", "-map", "0:a:0", "-af", af1]
-    cmd1 += _preserve + ["-c:a", "pcm_s16le", tmp_wav]
+        # Positive or zero offset: start from beginning
+        cmd1 = ["ffmpeg", "-y", "-i", target_path, "-vn", "-map", "0:a:0"]
+    
+    # Add channel/samplerate preservation (must be before filters)
+    cmd1 += _preserve
+    
+    # Add audio filter if needed
+    if af1:
+        cmd1 += ["-af", af1]
+    
+    # Final output codec
+    cmd1 += ["-c:a", "pcm_s16le", tmp_wav]
 
     if encoder in ("flac", "pcm_s16le"):
         cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder, out_path]
@@ -892,10 +929,12 @@ def export_drift_corrected() -> None:
         cmd2 = ["ffmpeg", "-y", "-i", tmp_wav] + _preserve + ["-c:a", encoder,
                 "-b:a", detected_bitrate, out_path]
 
-    _ch_str = f"  {detected_channels}ch" if detected_channels else ""
-    _sr_str = f"  {detected_samplerate}Hz" if detected_samplerate else ""
-    _off_str = f"  offset={_safe_init_off:+.0f}ms" if _safe_init_off != 0 else "  no offset trim"
-    console_log(f"Step 1/2  atempo={atempo}{_off_str} → WAV", "bold")
+    _ch_str = f"  {detected_channels}ch"
+    _sr_str = f"  {detected_samplerate}Hz"
+    _off_str = f"  offset={_safe_init_off:+.0f}ms" if _safe_init_off != 0 else "  no offset"
+    _atempo_str = f"  atempo={atempo}" if apply_atempo else "  no tempo change"
+    
+    console_log(f"Step 1/2{_off_str}{_atempo_str} → WAV", "bold")
     console_log("ffmpeg " + " ".join(cmd1[1:]), "cmd")
     console_log(f"Step 2/2  WAV → {detected_codec} @ {detected_bitrate}{_ch_str}{_sr_str}", "bold")
     console_log("ffmpeg " + " ".join(cmd2[1:]), "cmd")
@@ -913,12 +952,16 @@ def export_drift_corrected() -> None:
                 pass
             root.after(0, lambda: set_progress(100, "Export done"))
             console_log(f"✓ Saved: {out_path}", "ok")
-            _off_info = f"Offset correction: {_safe_init_off:+.0f} ms (baked in)" if _safe_init_off != 0 else "No offset correction applied"
+            
+            _off_info = f"Offset correction: {_safe_init_off:+.0f} ms" if _safe_init_off != 0 else "No offset correction"
+            _drift_info = f"Drift correction: atempo={atempo}" if apply_atempo else "No drift correction (negligible)"
+            
             root.after(0, lambda: dark_info_dialog("Export complete",
                 f"File saved:\n{out_path}\n\n"
                 f"Codec: {detected_codec}  Bitrate: {detected_bitrate}\n"
-                f"Drift correction: atempo={atempo}\n"
-                f"{_off_info}\n\n"
+                f"Channels: {detected_channels}  Sample rate: {detected_samplerate}Hz\n"
+                f"{_off_info}\n"
+                f"{_drift_info}\n\n"
                 f"Ready to mux – no further delay needed."))
         except subprocess.CalledProcessError as e:
             _rc = e.returncode
@@ -1175,45 +1218,119 @@ def _analyze_sync_impl() -> None:
             try:
                 base_file = file1 if ref_file == 1 else file2
                 total_dur = _get_file_duration(base_file)
-                if total_dur > 60:
+                if total_dur > 120:  # Need at least 2 minutes for meaningful multi-point measurement
+                    # Use the user-configured duration for ALL drift measurements
                     clip_dur = float(entry_duration.get())
-                    t2 = total_dur - clip_dur - 5
-                    t1 = start_time
-                    if t2 > t1 + 30:
-                        preoffset1_v = float(entry_preoffset1.get())
-                        preoffset2_v = float(entry_preoffset2.get())
-                        console_log(f"Drift check: measuring at t={t2:.1f}s (near end)...", "info")
-                        root.after(0, lambda: label_status.config(text="● Drift check: measuring near end of file...", fg="#ffa500"))
-                        root.after(0, lambda: set_progress(72, "Drift check..."))
-                        offset_ms_t2_raw = _run_correlation(file1, file2, t2 + preoffset1_v, t2 + preoffset2_v, clip_dur)
-                        offset_ms_t2 = round(-offset_ms_t2_raw if ref_file == 1 else offset_ms_t2_raw, 2)
-                        dt_s        = t2 - t1
-                        d_off       = offset_ms_t2 - offset_ms
-                        drift_rate  = d_off / dt_s
-                        atempo      = round(1.0 - drift_rate / 1000.0, 8)
-                        stretch_pct = round((atempo - 1.0) * 100, 6)
-                        init_off    = round(offset_ms - drift_rate * t1, 2)
-
+                    preoffset1_v = float(entry_preoffset1.get())
+                    preoffset2_v = float(entry_preoffset2.get())
+                    
+                    # Calculate measurement points
+                    # Start: t=10s to avoid intro issues
+                    # End: two points - one at 95% and one at the very end (last clip_dur seconds)
+                    # (subtitles/outros often have silence or just music)
+                    t_start = 10.0
+                    t_end_safe = total_dur * 0.95 - clip_dur  # 95% of duration
+                    t_end_last = total_dur - clip_dur         # Last clip_dur seconds of the file
+                    
+                    usable_dur = t_end_safe - t_start
+                    if usable_dur < 60:
+                        res += "\n\nDrift check skipped (usable range too short)."
+                        console_log("Drift check: usable range < 60s", "warn")
+                        _drift_atempo_tmp  = 1.0
+                        _drift_initoff_tmp = offset_ms
+                    else:
+                        # Determine number of intermediate points based on duration
+                        # For every 10 minutes, add one measurement point
+                        num_intermediate = min(4, max(0, int((usable_dur / 60) / 2.5)))  # 0-4 intermediate points
+                        
+                        # Build list of measurement times
+                        measurement_times = [t_start]
+                        if num_intermediate > 0:
+                            step = usable_dur / (num_intermediate + 1)
+                            for i in range(1, num_intermediate + 1):
+                                measurement_times.append(t_start + i * step)
+                        
+                        # Add two end points: 95% and last clip_dur seconds
+                        measurement_times.append(t_end_safe)
+                        measurement_times.append(t_end_last)
+                        
+                        console_log(f"Drift check: measuring at {len(measurement_times)} points across {total_dur:.1f}s file...", "bold")
+                        
+                        # Measure offset at each point
+                        offsets = []
+                        times = []
+                        base_progress = 65
+                        progress_step = 25 / len(measurement_times)
+                        
+                        for idx, t in enumerate(measurement_times):
+                            # Label the measurement point appropriately
+                            if idx == 0:
+                                label = "start"
+                            elif idx == len(measurement_times) - 1:
+                                label = "end"
+                            elif idx == len(measurement_times) - 2:
+                                label = "95%"
+                            else:
+                                label = f"{int(100*t/total_dur)}%"
+                            
+                            console_log(f"  Point {idx+1}/{len(measurement_times)}: t={t:.1f}s ({label})...", "info")
+                            root.after(0, lambda lbl=label: label_status.config(text=f"● Drift check: {lbl}...", fg="#ffa500"))
+                            root.after(0, lambda p=base_progress + idx*progress_step: set_progress(p, f"Drift: {label}..."))
+                            
+                            offset_raw = _run_correlation(file1, file2, t + preoffset1_v, t + preoffset2_v, clip_dur)
+                            offset_corrected = round(-offset_raw if ref_file == 1 else offset_raw, 2)
+                            offsets.append(offset_corrected)
+                            times.append(t)
+                            console_log(f"    → {offset_corrected:+.2f} ms", "ok")
+                        
+                        # Linear regression to find best-fit drift rate
+                        # This averages out measurement noise better than just using first/last points
+                        import numpy as np
+                        times_arr = np.array(times)
+                        offsets_arr = np.array(offsets)
+                        
+                        # y = drift_rate * x + init_off
+                        # Using least squares fit
+                        A = np.vstack([times_arr, np.ones(len(times_arr))]).T
+                        drift_rate, init_off = np.linalg.lstsq(A, offsets_arr, rcond=None)[0]
+                        
+                        atempo = round(1.0 - drift_rate / 1000.0, 8)
+                        
+                        # Calculate R² to show fit quality
+                        residuals = offsets_arr - (drift_rate * times_arr + init_off)
+                        ss_res = np.sum(residuals**2)
+                        ss_tot = np.sum((offsets_arr - np.mean(offsets_arr))**2)
+                        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 1.0
+                        
+                        console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, init={init_off:+.2f} ms, R²={r_squared:.4f}", "ok")
+                        
                         if abs(drift_rate) < 0.1:
-                            res += "\n\nNo significant drift."
+                            res += f"\n\nNo significant drift (< 0.1 ms/s)."
+                            res += f"\nStatic offset: {round(init_off):+d} ms"
+                            res += f"\n({len(measurement_times)} points measured, R²={r_squared:.3f})"
                             console_log(f"Drift: {drift_rate:+.4f} ms/s – negligible", "ok")
+                            _drift_atempo_tmp  = 1.0
+                            _drift_initoff_tmp = init_off
                         else:
                             res += (
                                 f"\n\nDrift detected: {drift_rate:+.4f} ms/s"
                                 f"\natempo: {atempo:.8f}"
-                                f"\nOffset at t=0: {round(init_off):+d} ms"
+                                f"\nInitial offset: {round(init_off):+d} ms"
+                                f"\n({len(measurement_times)} points, R²={r_squared:.3f})"
                                 f"\n→ Use Export to apply both corrections"
                             )
                             console_log(f"Drift: {drift_rate:+.4f} ms/s  atempo={atempo:.8f}", "warn")
                             _drift_atempo_tmp  = atempo
                             _drift_initoff_tmp = init_off
-                    else:
-                        res += "\n\nDrift check skipped (points too close)."
                 else:
-                    res += "\n\nDrift check skipped (file too short)."
+                    res += "\n\nDrift check skipped (file < 2 min)."
+                    _drift_atempo_tmp  = 1.0
+                    _drift_initoff_tmp = offset_ms
             except Exception as drift_err:
                 res += f"\n\nDrift check failed: {drift_err}"
                 console_log(f"Drift check error: {drift_err}", "error")
+                _drift_atempo_tmp  = 1.0
+                _drift_initoff_tmp = offset_ms
 
         # Store drift values on label_result for export_drift_corrected()
         label_result._offset_ms = offset_ms
@@ -1679,33 +1796,40 @@ def show_tips():
 
     tips_content = (
         "RESULTS EXPLAINED:\n"
-        "  X late/early  – measured offset at analysis point\n"
+        "  X late/early  – measured offset at your chosen analysis point\n"
         "  Delay X ms    – apply as delay in muxer/player to fix sync\n"
         "                  positive = shift audio forward in time\n"
         "  Drift ms/s    – desync growth rate per second\n"
         "  atempo        – speed correction factor\n"
-        "  Offset at t=0 – starting offset baked into exported file\n"
+        "  Initial offset – starting offset at t=10s (from linear fit)\n"
+        "  R²            – fit quality (1.0 = perfect, >0.95 = good)\n"
         "\n"
         "WORKFLOW:\n"
-        "  1. Run analysis without Drift Check first\n"
-        "  2. Verify the offset is correct\n"
-        "  3. If sync drifts over time, enable Drift Check and re-run\n"
-        "  4. Use Export to apply corrections\n"
+        "  1. Select any point in the file for quick offset check\n"
+        "  2. Run analysis to see if files are in sync\n"
+        "  3. If sync drifts over time, enable 'Check drift'\n"
+        "  4. Drift check measures automatically at multiple points\n"
+        "  5. Use Export to apply atempo + initial offset correction\n"
         "\n"
         "FOR BEST ACCURACY:\n"
         "  • Pick a clip with clear speech or sharp sounds\n"
         "  • 30–60 seconds duration recommended\n"
         "  • Avoid silence, ambient noise, or multilingual audio\n"
         "\n"
-        "DRIFT CHECK:\n"
-        "  • Measures offset at start and near end of file\n"
-        "  • Detects progressive desync growing over time\n"
-        "  • Use Export to apply full correction\n"
+        "DRIFT CHECK (AUTOMATIC MULTI-POINT):\n"
+        "  • Measures at START (t=10s)\n"
+        "  • Adds 1-4 intermediate points based on file length\n"
+        "  • Measures at 95% (avoids subtitle/outro silence)\n"
+        "  • Measures at END (last safe point)\n"
+        "  • Uses linear regression for best-fit drift rate\n"
+        "  • All measurements use your Duration setting\n"
+        "  • Your 'Start time' setting is ignored during drift check\n"
+        "  • Requires file >2 minutes, shows R² fit quality\n"
         "\n"
         "MANUAL DRIFT:\n"
         "  • Enter two known timestamps with their offsets\n"
         "  • Works on a single file, no reference needed\n"
-        "  • If audio starts in sync: t=0, offset=0 as first point\n"
+        "  • If audio starts in sync: t=10, offset=0 as first point\n"
         "  • Click Calculate → then Export"
     )
 

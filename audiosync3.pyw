@@ -1295,43 +1295,57 @@ def _analyze_sync_impl() -> None:
                         lower_bound = q1 - outlier_threshold * iqr
                         upper_bound = q3 + outlier_threshold * iqr
                         
+                        # Filter out outliers
+                        valid_mask = (offsets_arr >= lower_bound) & (offsets_arr <= upper_bound)
                         outliers = []
-                        for i, offset in enumerate(offsets):
-                            if offset < lower_bound or offset > upper_bound:
+                        for i, (offset, valid) in enumerate(zip(offsets, valid_mask)):
+                            if not valid:
                                 outliers.append((i+1, times[i], offset))
                         
                         if outliers:
-                            console_log(f"WARNING: {len(outliers)} outlier(s) detected:", "warn")
+                            console_log(f"WARNING: {len(outliers)} outlier(s) detected and IGNORED:", "warn")
                             for pt_num, t, offset in outliers:
-                                console_log(f"  Point {pt_num} (t={t:.1f}s): {offset:+.2f} ms", "warn")
-                            console_log("  These points may have silence, noise, or poor correlation", "warn")
+                                console_log(f"  Point {pt_num} (t={t:.1f}s): {offset:+.2f} ms - EXCLUDED from regression", "warn")
+                            console_log("  Possible silence, noise, or poor correlation at these points", "warn")
+                        
+                        # Use only valid (non-outlier) points for regression
+                        times_valid = times_arr[valid_mask]
+                        offsets_valid = offsets_arr[valid_mask]
+                        
+                        if len(times_valid) < 2:
+                            raise Exception(f"Too many outliers detected ({len(outliers)}/{len(offsets)}). Cannot calculate drift.")
                         
                         # y = drift_rate * x + intercept
-                        # Using least squares fit for drift rate
-                        A = np.vstack([times_arr, np.ones(len(times_arr))]).T
-                        drift_rate, intercept = np.linalg.lstsq(A, offsets_arr, rcond=None)[0]
+                        # Using least squares fit for drift rate (only on valid points)
+                        A = np.vstack([times_valid, np.ones(len(times_valid))]).T
+                        drift_rate, intercept = np.linalg.lstsq(A, offsets_valid, rcond=None)[0]
                         
                         # Initial offset should be taken from the FIRST measurement (at t=10s)
                         # not from the regression intercept (which would be extrapolated to t=0)
-                        init_off = offsets[0]  # First measurement at start point
+                        # BUT: only if first point is not an outlier
+                        if valid_mask[0]:
+                            init_off = offsets[0]  # First measurement at start point
+                        else:
+                            # First point is outlier - use regression intercept at first valid time
+                            init_off = drift_rate * times_valid[0] + intercept
+                            console_log(f"Note: First point was outlier, using interpolated init offset", "warn")
                         
                         atempo = round(1.0 - drift_rate / 1000.0, 8)
                         
-                        # Calculate R² to show fit quality
-                        residuals = offsets_arr - (drift_rate * times_arr + intercept)
+                        # Calculate R² to show fit quality (only for valid points)
+                        residuals = offsets_valid - (drift_rate * times_valid + intercept)
                         ss_res = np.sum(residuals**2)
-                        ss_tot = np.sum((offsets_arr - np.mean(offsets_arr))**2)
+                        ss_tot = np.sum((offsets_valid - np.mean(offsets_valid))**2)
                         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 1.0
                         
-                        console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, R²={r_squared:.4f}", "ok")
+                        console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, R²={r_squared:.4f} ({len(times_valid)}/{len(times)} points)", "ok")
                         console_log(f"Initial offset: {init_off:+.2f} ms (measured at t={times[0]:.1f}s)", "ok")
                         
-                        # Warn if R² is too low (poor linear fit)
+                        # Warn if R² is too low (poor linear fit) even after removing outliers
                         if r_squared < 0.8:
-                            console_log(f"WARNING: Low R² ({r_squared:.3f}) - drift may not be linear or measurements inconsistent", "warn")
+                            console_log(f"WARNING: Low R² ({r_squared:.3f}) even after removing outliers", "warn")
                             res += f"\n\n⚠️ WARNING: Low fit quality (R²={r_squared:.3f})"
-                            res += f"\nDrift may not be linear or some measurements are poor."
-                            res += f"\nConsider checking problematic time points manually."
+                            res += f"\nDrift may not be linear. Results may be unreliable."
                         
                         if abs(drift_rate) < 0.1:
                             res += f"\n\nNo significant drift (< 0.1 ms/s)."

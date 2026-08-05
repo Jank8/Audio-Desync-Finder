@@ -1285,7 +1285,6 @@ def _analyze_sync_impl() -> None:
                         
                         # Linear regression to find best-fit drift rate
                         # This averages out measurement noise better than just using first/last points
-                        import numpy as np
                         times_arr = np.array(times)
                         offsets_arr = np.array(offsets)
                         

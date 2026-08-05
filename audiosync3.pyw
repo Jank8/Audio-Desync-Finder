@@ -1288,24 +1288,29 @@ def _analyze_sync_impl() -> None:
                         times_arr = np.array(times)
                         offsets_arr = np.array(offsets)
                         
-                        # y = drift_rate * x + init_off
-                        # Using least squares fit
+                        # y = drift_rate * x + intercept
+                        # Using least squares fit for drift rate
                         A = np.vstack([times_arr, np.ones(len(times_arr))]).T
-                        drift_rate, init_off = np.linalg.lstsq(A, offsets_arr, rcond=None)[0]
+                        drift_rate, intercept = np.linalg.lstsq(A, offsets_arr, rcond=None)[0]
+                        
+                        # Initial offset should be taken from the FIRST measurement (at t=10s)
+                        # not from the regression intercept (which would be extrapolated to t=0)
+                        init_off = offsets[0]  # First measurement at start point
                         
                         atempo = round(1.0 - drift_rate / 1000.0, 8)
                         
                         # Calculate R² to show fit quality
-                        residuals = offsets_arr - (drift_rate * times_arr + init_off)
+                        residuals = offsets_arr - (drift_rate * times_arr + intercept)
                         ss_res = np.sum(residuals**2)
                         ss_tot = np.sum((offsets_arr - np.mean(offsets_arr))**2)
                         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 1.0
                         
-                        console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, init={init_off:+.2f} ms, R²={r_squared:.4f}", "ok")
+                        console_log(f"Linear fit: drift={drift_rate:+.4f} ms/s, R²={r_squared:.4f}", "ok")
+                        console_log(f"Initial offset: {init_off:+.2f} ms (measured at t={times[0]:.1f}s)", "ok")
                         
                         if abs(drift_rate) < 0.1:
                             res += f"\n\nNo significant drift (< 0.1 ms/s)."
-                            res += f"\nStatic offset: {round(init_off):+d} ms"
+                            res += f"\nStatic offset: {round(init_off):+d} ms (at t={times[0]:.0f}s)"
                             res += f"\n({len(measurement_times)} points measured, R²={r_squared:.3f})"
                             console_log(f"Drift: {drift_rate:+.4f} ms/s – negligible", "ok")
                             _drift_atempo_tmp  = 1.0
@@ -1314,7 +1319,7 @@ def _analyze_sync_impl() -> None:
                             res += (
                                 f"\n\nDrift detected: {drift_rate:+.4f} ms/s"
                                 f"\natempo: {atempo:.8f}"
-                                f"\nInitial offset: {round(init_off):+d} ms"
+                                f"\nInitial offset: {round(init_off):+d} ms (at t={times[0]:.0f}s)"
                                 f"\n({len(measurement_times)} points, R²={r_squared:.3f})"
                                 f"\n→ Use Export to apply both corrections"
                             )

@@ -91,6 +91,7 @@ import sys
 import threading
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
                                QLabel, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -98,7 +99,7 @@ from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
                             InfoBar, InfoBarPosition, LineEdit, MessageBox,
                             PrimaryPushButton, ProgressBar, PushButton,
                             RadioButton, SpinBox, StrongBodyLabel, TableWidget,
-                            TextEdit, Theme, setTheme)
+                            TextEdit, Theme, setTheme, setThemeColor)
 
 import shutil
 
@@ -109,9 +110,24 @@ from matplotlib.figure import Figure
 import sync_engine as engine
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.2"
+APP_VERSION = "3.0.3"
 
 ACCENT = "#4cc2ff"
+
+
+def system_accent_hex() -> str:
+    """The active Windows accent colour (DWM stores it as 0xAABBGGRR)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\\Microsoft\\Windows\\DWM") as key:
+            value, _ = winreg.QueryValueEx(key, "AccentColor")
+        r, g, b = value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
+        if (r, g, b) == (0, 0, 0):
+            raise ValueError("black accent")
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return "#4cc2ff"
 
 
 class Card(CardWidget):
@@ -134,6 +150,7 @@ class MainWindow(FluentWindow):
         self.points = []
         self.meta = None
         self.worker = None
+        self.accent = system_accent_hex()
         self.stop_event = threading.Event()
         self.ui_queue = queue.Queue()
 
@@ -508,7 +525,7 @@ class MainWindow(FluentWindow):
         if self.points:
             ax.scatter([p["t"] for p in self.points],
                        [p["offset"] for p in self.points],
-                       s=8, color=ACCENT, alpha=0.9)
+                       s=8, color=self.accent, alpha=0.9)
         for seg in (self.plan or {}).get("segments", []):
             x0, x1 = seg["t_start"], seg["t_end"]
             y0 = seg["offset"]
@@ -526,6 +543,7 @@ class MainWindow(FluentWindow):
 
 def main():
     setTheme(Theme.DARK)
+    setThemeColor(QColor(system_accent_hex()))
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()

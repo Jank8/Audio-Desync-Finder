@@ -273,6 +273,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.3
+
+- The accent colour is the **active Windows accent** (read from
+  `HKCU\Software\Microsoft\Windows\DWM\AccentColor`), applied to every Fluent
+  control and to the chart through `setThemeColor`.
+
 ### 3.0.2
 
 - **Dependency bootstrap**: on first run the app installs PySide6,

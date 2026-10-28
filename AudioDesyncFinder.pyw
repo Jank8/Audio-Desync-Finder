@@ -1171,7 +1171,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.10"
+APP_VERSION = "3.0.11"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

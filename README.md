@@ -21,58 +21,23 @@ A precise, lightweight GUI utility written in Python to detect, analyze, and cal
 
 ## 🛠️ Requirements
 
+Version 3 runs on a plain Python installation - everything else installs itself
+on first launch.
+
 | Requirement | Notes |
 |---|---|
-| **Python 3.8+** | Tested with 3.10, 3.11 and 3.13 |
-| **FFmpeg** | Installed automatically via `winget` when missing (see below) |
-| **numpy**, **scipy**, **matplotlib** | Installed automatically on first launch (see below) |
+| **Python 3.9 or newer** | Developed and tested on 3.13 |
+| **PySide6** | Qt 6 UI toolkit, ~100 MB (installed automatically) |
+| **PySide6-Fluent-Widgets** | Windows 11 Fluent controls and Mica (installed automatically) |
+| **numpy**, **scipy**, **matplotlib** | Signal processing and the chart (installed automatically) |
+| **FFmpeg** | Audio extraction; a dialog offers the winget install when it is missing |
 
-### Automatic installation
+Before the window opens the app checks every package and runs `pip install` for
+whatever is missing, showing a small progress window. `ADS_THEME=light` or
+`ADS_THEME=dark` forces a theme instead of following Windows.
 
-You do **not** need to run `pip install` by hand. On startup the program checks
-for `numpy`, `scipy` and `matplotlib`; whatever is missing is installed with
-`pip` while a small window streams the installer output. The main window opens
-as soon as the packages are ready.
-
-The installer tries, in order, until one succeeds:
-
-1. `pip install <packages>` — normal install, respects an active virtualenv
-2. `pip install --user <packages>` — used when `site-packages` is not writable
-3. `--user --break-system-packages` — only on Linux/macOS (PEP 668 systems)
-
-If `pip` itself is absent, `ensurepip` bootstraps it first. When automatic
-installation is impossible (offline machine, frozen executable, restricted
-Python), a dialog with the exact manual command is shown instead.
-
-To disable the automatic installer — e.g. for diagnostics or to manage the
-packages yourself — set an environment variable before launching:
-
-```
-set ADS_SKIP_DEP_INSTALL=1
-```
-
-Manual install, if you prefer it:
-
-```
-pip install numpy scipy matplotlib
-```
-
-Install FFmpeg (if not already present):
-
-```
-winget install --id Gyan.FFmpeg -e
-```
-
-FFmpeg is installed **automatically**, no button and no confirmation step: if
-none is found at startup, the app runs the winget command above and streams its
-output into the console panel. Detection is repeated before every analysis, and
-`PATH` is re-read from the registry each time, so an FFmpeg installed by a
-just-finished winget run — or one you installed yourself outside the app — is
-picked up immediately, without restarting the program.
-
-If winget is unavailable or the install fails, the console panel shows the
-exact manual command; the app stays usable and will use FFmpeg as soon as it
-appears on `PATH`.
+The 2.x build in `legacy/` is the older single-file Tk version; it needs only
+numpy, scipy, matplotlib and FFmpeg.
 
 ---
 
@@ -271,6 +236,10 @@ Audio Desync Finder/
 ---
 
 ## 📜 Changelog
+
+### 3.0.11
+
+- Requirements section rewritten for version 3.
 
 ### 3.0.10
 

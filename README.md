@@ -263,13 +263,26 @@ The refined lag is converted to milliseconds.  If pre-offsets were set, their di
 
 ```
 Audio Desync Finder/
-├── audiosync3.pyw   # Main application (single-file)
+├── AudioDesyncFinder.pyw   # 3.0 UI (PySide6 + Fluent, Mica)
+├── sync_engine.py          # shared analysis engine
+├── legacy/                 # the 2.x Tk single-file version
 └── README.md
 ```
 
 ---
 
 ## 📜 Changelog
+
+### 3.0
+
+- **New UI: PySide6 + Fluent Widgets** with a real Windows 11 **Mica** backdrop,
+  rounded cards and Fluent controls. No navigation pane, no hero header - a
+  single screen that fills the window.
+- **Engine extracted** to `sync_engine.py` (decoding, multi-point scan, model,
+  export, residual measurement). Shared, GUI-free, importable.
+- **Two files now**: `AudioDesyncFinder.pyw` (UI) + `sync_engine.py` (engine).
+  The Tk version moved to `legacy/audiosync3_tk.pyw` and still works.
+- Dependencies: `PySide6`, `PySide6-Fluent-Widgets` (plus numpy/scipy/matplotlib).
 
 ### 2.0.1
 

@@ -1159,7 +1159,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.7"
+APP_VERSION = "3.0.8"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1243,6 +1243,8 @@ class MainWindow(FluentWindow):
         fl.setSpacing(8)
         self.edit_ref = self._file_row(fl, "File 1:", "ref", checked=True)
         self.edit_tgt = self._file_row(fl, "File 2:", "tgt", checked=False)
+        self.fps_label = BodyLabel("")
+        fl.addWidget(self.fps_label)
         outer.addWidget(files)
 
         # ---------------- scan settings ---------------------------------
@@ -1252,16 +1254,19 @@ class MainWindow(FluentWindow):
         sl.setSpacing(10)
         sl.addWidget(StrongBodyLabel("Window (s)"))
         self.spin_window = SpinBox()
+        self.spin_window.setFixedWidth(120)
         self.spin_window.setRange(10, 180)
         self.spin_window.setValue(40)
         sl.addWidget(self.spin_window)
         sl.addWidget(StrongBodyLabel("Step (s)"))
         self.spin_step = SpinBox()
+        self.spin_step.setFixedWidth(120)
         self.spin_step.setRange(5, 180)
         self.spin_step.setValue(30)
         sl.addWidget(self.spin_step)
         sl.addWidget(StrongBodyLabel("Min confidence"))
         self.spin_conf = SpinBox()
+        self.spin_conf.setFixedWidth(120)
         self.spin_conf.setRange(1, 50)
         self.spin_conf.setValue(2)
         sl.addWidget(self.spin_conf)
@@ -1395,13 +1400,16 @@ class MainWindow(FluentWindow):
         ref, tgt = self._ordered_paths()
         r = probe_framerate(ref)
         t = probe_framerate(tgt)
-        note = ""
-        if r and t:
-            note = f"   [{r:g} fps  →  {t:g} fps"
-            if abs(r - t) > 1e-6:
-                note += f", atempo {r / t:.6f}"
-            note += "]"
-        self.status.setText(f"{os.path.basename(ref)}  →  {os.path.basename(tgt)}{note}")
+        info = f"Reference: {os.path.basename(ref)}"
+        if r:
+            info += f"   [{r:g} fps]"
+        info += "      →      Target: " + os.path.basename(tgt)
+        if t:
+            info += f"   [{t:g} fps]"
+        if r and t and abs(r - t) > 1e-6:
+            info += f"      atempo {r / t:.6f}"
+        self.fps_label.setText(info)
+        self.status.setText("Ready")
 
     def _ordered_paths(self):
         base_is_ref = getattr(self, "radio_ref", None) is None or self.radio_ref.isChecked()

@@ -272,6 +272,14 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.8
+
+- **Spin boxes show their values again** - they were squeezed to the arrows only
+  and now keep a fixed 120 px width.
+- **Framerates are always visible**: a line under the file rows reads
+  `Reference: name.mkv [23.976 fps] -> Target: film.mp4 [25 fps] atempo 0.959040`
+  as soon as both files are chosen.
+
 ### 3.0.7
 
 - **Base no longer jumps.** Picking a file used to move the Base marker to that

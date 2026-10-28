@@ -90,7 +90,7 @@ import queue
 import sys
 import threading
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QColor, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
@@ -1192,7 +1192,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.13"
+APP_VERSION = "3.0.14"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1254,6 +1254,8 @@ class MainWindow(FluentWindow):
         self.chart_grid = "#00000022" if LIGHT else "#ffffff22"
         self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
         self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
+        self.settings = QSettings("AudioDesync", "AudioDesyncFinder")
+        self.last_dir = str(self.settings.value("last_dir", "") or "")
         self.stop_event = threading.Event()
         self.ui_queue = queue.Queue()
 
@@ -1421,10 +1423,11 @@ class MainWindow(FluentWindow):
 
     def pick_file(self, which):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a media file", "",
+            self, "Select a media file", self.last_dir,
             "Media (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.m4a *.aac);;All files (*)")
         if not path:
             return
+        self._remember_dir(path)
         if which == "ref":
             self.ref_path = path
             self.edit_ref.setText(os.path.basename(path))
@@ -1433,6 +1436,13 @@ class MainWindow(FluentWindow):
             self.edit_tgt.setText(os.path.basename(path))
         if self.ref_path and self.tgt_path:
             self._load_pair()
+
+    def _remember_dir(self, path):
+        """Keep the folder of the last chosen file for the next dialog."""
+        folder = os.path.dirname(path)
+        if folder and folder != self.last_dir:
+            self.last_dir = folder
+            self.settings.setValue("last_dir", folder)
 
     def _load_pair(self):
         ref, tgt = self._ordered_paths()
@@ -1520,10 +1530,12 @@ class MainWindow(FluentWindow):
     def export_audio(self):
         if not self.plan or not self.plan.get("segments"):
             return
+        start = os.path.join(self.last_dir, "corrected.mka") if self.last_dir else "corrected.mka"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save corrected audio", "corrected.mka", "Matroska Audio (*.mka)")
+            self, "Save corrected audio", start, "Matroska Audio (*.mka)")
         if not path:
             return
+        self._remember_dir(path)
         path = mka_path(path)
         self.btn_export.setEnabled(False)
         self.btn_stop.setEnabled(True)

@@ -279,6 +279,18 @@ def _envelope_sos(sr: int = SCAN_SR):
     return sos
 
 
+def _get_file_duration(path: str) -> float:
+    """Media duration in seconds via ffprobe (0.0 when it cannot be read)."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, startupinfo=get_startupinfo())
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     """
     Decode the first audio stream of *path* to mono 16-bit PCM at *sr*.
@@ -1159,7 +1171,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.9"
+APP_VERSION = "3.0.10"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

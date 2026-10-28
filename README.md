@@ -272,6 +272,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.10
+
+- **Fixed: scan crashed with `_get_file_duration is not defined`.** The helper
+  was lost when the engine was split out; it is back and the whole pipeline
+  (decode -> scan -> model) is verified end to end.
+
 ### 3.0.9
 
 - Window, Step and Min confidence are **plain text fields** now (with an integer

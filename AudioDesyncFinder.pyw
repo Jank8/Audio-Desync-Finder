@@ -3,6 +3,88 @@
 The analysis engine lives in sync_engine.py; this file is only the UI.
 Run: pythonw audiosync4.pyw
 """
+# ---------------------------------------------------------------------------
+# DEPENDENCY BOOTSTRAP - runs before the Qt imports below.
+# A fresh Python installation has none of these; install them first so a
+# double-click on the .pyw works out of the box.
+# ---------------------------------------------------------------------------
+import importlib.util
+import subprocess
+import sys
+
+_REQUIRED = [
+    ("PySide6", "PySide6"),
+    ("qfluentwidgets", "PySide6-Fluent-Widgets"),
+    ("numpy", "numpy"),
+    ("scipy", "scipy"),
+    ("matplotlib", "matplotlib"),
+]
+
+
+def _missing_dependencies():
+    missing = []
+    for module, package in _REQUIRED:
+        try:
+            if importlib.util.find_spec(module) is None:
+                missing.append(package)
+        except Exception:
+            missing.append(package)
+    return missing
+
+
+def _install_dependencies(packages):
+    """Install with a minimal Tk window - tkinter ships with Python."""
+    import threading
+    import tkinter as tk
+    from tkinter import ttk
+
+    win = tk.Tk()
+    win.title("Audio Desync Finder - installing dependencies")
+    win.geometry("560x150")
+    win.configure(bg="#1c1c1c")
+    win.resizable(False, False)
+    tk.Label(win, text="Installing: " + ", ".join(packages), bg="#1c1c1c",
+             fg="#4cc2ff", font=("Segoe UI", 10, "bold")).pack(
+        anchor="w", padx=16, pady=(16, 4))
+    state = tk.Label(win, text="starting pip…", bg="#1c1c1c", fg="#9aa4ae",
+                     font=("Segoe UI", 8), anchor="w")
+    state.pack(fill="x", padx=16)
+    bar = ttk.Progressbar(win, mode="indeterminate")
+    bar.pack(fill="x", padx=16, pady=14)
+    bar.start(55)
+
+    result = {"ok": False}
+
+    def worker():
+        cmd = [sys.executable, "-m", "pip", "install",
+               "--disable-pip-version-check", "--no-input", *packages]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            result["ok"] = proc.returncode == 0
+        except Exception:
+            result["ok"] = False
+        win.after(0, win.destroy)
+
+    threading.Thread(target=worker, daemon=True).start()
+    win.mainloop()
+    return result["ok"]
+
+
+_missing = _missing_dependencies()
+if _missing:
+    if not _install_dependencies(_missing):
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Missing libraries",
+            "Could not install:\n  " + "\n  ".join(_missing) +
+            "\n\nInstall them manually:\n" + sys.executable +
+            " -m pip install " + " ".join(_missing))
+        sys.exit(1)
+    importlib.invalidate_caches()
+
 import os
 import queue
 import sys
@@ -18,6 +100,8 @@ from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
                             RadioButton, SpinBox, StrongBodyLabel, TableWidget,
                             TextEdit, Theme, setTheme)
 
+import shutil
+
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -25,7 +109,7 @@ from matplotlib.figure import Figure
 import sync_engine as engine
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.1"
+APP_VERSION = "3.0.2"
 
 ACCENT = "#4cc2ff"
 
@@ -358,6 +442,36 @@ class MainWindow(FluentWindow):
                 self.btn_stop.setEnabled(False)
                 self.progress.setValue(100 if self.plan else 0)
 
+    def check_ffmpeg(self):
+        """Offer a one-click winget install when FFmpeg is missing."""
+        if shutil.which("ffmpeg"):
+            self.log("FFmpeg found")
+            return
+        box = MessageBox(
+            "FFmpeg is required to extract audio and was not found.\n"
+            "Install it now with winget?", "Audio Desync Finder", self)
+        if not box.exec():
+            self.log("FFmpeg missing - install it manually: winget install --id Gyan.FFmpeg -e")
+            return
+        self.log("Installing FFmpeg via winget…")
+        threading.Thread(target=self._install_ffmpeg, daemon=True).start()
+
+    def _install_ffmpeg(self):
+        try:
+            proc = subprocess.Popen(
+                ["winget", "install", "--id", "Gyan.FFmpeg", "-e",
+                 "--accept-source-agreements", "--accept-package-agreements"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    self.ui_queue.put(("log", line))
+            proc.wait()
+            self.ui_queue.put(("log", "FFmpeg installed" if shutil.which("ffmpeg")
+                               else "winget finished - restart the app if FFmpeg is still missing"))
+        except Exception as exc:
+            self.ui_queue.put(("log", f"winget failed: {exc}"))
+
     def _fill_table(self):
         self.table.setRowCount(len(self.points))
         for i, p in enumerate(self.points):
@@ -415,6 +529,7 @@ def main():
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
+    QTimer.singleShot(500, win.check_ffmpeg)
     return app.exec()
 
 

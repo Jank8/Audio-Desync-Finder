@@ -273,6 +273,14 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.2
+
+- **Dependency bootstrap**: on first run the app installs PySide6,
+  PySide6-Fluent-Widgets, numpy, scipy and matplotlib with pip, showing a small
+  Tk progress window. A fresh Python installation is enough to double-click it.
+- **FFmpeg**: if it is missing, a dialog offers the one-click winget install and
+  streams the output into the log.
+
 ### 3.0.1
 
 - Measurement table next to the chart: time, offset, confidence and source for

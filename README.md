@@ -272,6 +272,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.7
+
+- **Base no longer jumps.** Picking a file used to move the Base marker to that
+  file; now Base stays where you set it.
+- The two Base buttons are one exclusive group, so only one can be active.
+
 ### 3.0.6
 
 - **Live theme switch**: the window listens for `WM_SETTINGCHANGE` and, when

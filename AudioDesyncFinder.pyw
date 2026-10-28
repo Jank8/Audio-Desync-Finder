@@ -92,8 +92,9 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
-                               QLabel, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
+                               QHBoxLayout, QLabel, QTableWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
                             InfoBar, InfoBarPosition, LineEdit, MessageBox,
@@ -1158,7 +1159,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.6"
+APP_VERSION = "3.0.7"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1364,9 +1365,13 @@ class MainWindow(FluentWindow):
         row.addWidget(browse)
         radio = RadioButton("Base")
         radio.setChecked(checked)
-        if not hasattr(self, "base_group"):
-            self.base_group = []
-        self.base_group.append((which, radio))
+        if not hasattr(self, "base_buttons"):
+            self.base_buttons = QButtonGroup(self)   # exactly one Base at a time
+        self.base_buttons.addButton(radio)
+        if which == "ref":
+            self.radio_ref = radio
+        else:
+            self.radio_tgt = radio
         row.addWidget(radio)
         layout.addLayout(row)
         return edit
@@ -1383,8 +1388,6 @@ class MainWindow(FluentWindow):
         else:
             self.tgt_path = path
             self.edit_tgt.setText(os.path.basename(path))
-        for key, radio in self.base_group:
-            radio.setChecked(key == which)
         if self.ref_path and self.tgt_path:
             self._load_pair()
 
@@ -1401,7 +1404,7 @@ class MainWindow(FluentWindow):
         self.status.setText(f"{os.path.basename(ref)}  →  {os.path.basename(tgt)}{note}")
 
     def _ordered_paths(self):
-        base_is_ref = any(k == "ref" and rd.isChecked() for k, rd in self.base_group)
+        base_is_ref = getattr(self, "radio_ref", None) is None or self.radio_ref.isChecked()
         return (self.ref_path, self.tgt_path) if base_is_ref else (self.tgt_path, self.ref_path)
 
     def _fps_hint(self):

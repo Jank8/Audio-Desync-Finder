@@ -271,6 +271,14 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 2.0.1
+
+- "Load files" button removed - picking either file reloads the timeline.
+- The theme follows the Windows setting: dark or light palette, title bar and
+  sv-ttk theme switch together at startup.
+- Windows 11 Mica backdrop requested through DWM (silently ignored on older
+  builds); the title bar colour follows the system theme.
+
 ### 2.0
 
 - **One screen** - the Quick tab and its single-point analyzer are gone. The

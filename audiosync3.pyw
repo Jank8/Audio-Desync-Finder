@@ -35,13 +35,42 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 
+def _system_uses_light_theme() -> bool:
+    """True when Windows is set to the light app theme."""
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") as key:
+            return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
+    except Exception:
+        return False
+
+
+def _apply_mica(window, light: bool) -> None:
+    """Ask DWM for the Windows 11 Mica backdrop (silently ignored elsewhere)."""
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        backdrop = ctypes.c_int(2)          # DWMSBT_MAINWINDOW = Mica
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
+        mode = ctypes.c_int(0 if light else 1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(mode), ctypes.sizeof(mode))
+    except Exception:
+        pass
+
+
+APP_LIGHT = _system_uses_light_theme()
+
 try:
     import sv_ttk
 except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0"
+APP_VERSION = "2.0.1"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -3896,7 +3925,7 @@ class TimelinePanel:
 # ===========================================================================
 root = tk.Tk()
 if sv_ttk is not None:
-    sv_ttk.set_theme("dark")
+    sv_ttk.set_theme("light" if APP_LIGHT else "dark")
 root.title(f"{APP_NAME} {APP_VERSION} – precise audio offset detection")
 root.geometry("1680x940")
 root.minsize(1180, 700)
@@ -3905,18 +3934,23 @@ root.resizable(True, True)
 
 # Apply dark title bar as soon as the window handle is available
 root.update()
-_apply_dark_titlebar(root)
+if not APP_LIGHT:
+    _apply_dark_titlebar(root)
+_apply_mica(root, APP_LIGHT)
 root.protocol("WM_DELETE_WINDOW", _on_close)
 
-bg_main = "#1a1a1a"
-bg_panel = "#252525"
-bg_input = "#2d2d2d"
-fg_main = "#ffffff"
-fg_dim = "#aaaaaa"
-fg_accent = "#4a9eff"
-btn_primary = "#2a7de1"
-btn_success = "#28a745"
-btn_hover = "#3d8bff"
+if APP_LIGHT:
+    bg_main, bg_panel, bg_input = "#f3f3f3", "#ffffff", "#ffffff"
+    fg_main, fg_dim, fg_accent = "#1a1a1a", "#5a5a5a", "#0067c0"
+    btn_primary, btn_success, btn_hover = "#0067c0", "#0f7b0f", "#1a86d9"
+else:
+    bg_main, bg_panel, bg_input = "#1a1a1a", "#252525", "#2d2d2d"
+    fg_main, fg_dim, fg_accent = "#ffffff", "#aaaaaa", "#4a9eff"
+    btn_primary, btn_success, btn_hover = "#2a7de1", "#28a745", "#3d8bff"
+
+# the timeline panel uses its own names for the same palette
+BG_DARK, BG_PANEL, BG_INPUT = bg_main, bg_panel, bg_input
+FG_DIM, FG_ACCENT = fg_dim, fg_accent
 
 ref_var         = tk.IntVar(value=1)
 check_drift_var = tk.BooleanVar(value=False)
@@ -4145,10 +4179,6 @@ tl_info = tk.Label(tl_header,
                    anchor=tk.W, justify=tk.LEFT)
 tl_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-tk.Button(tl_header, text="Load files", command=lambda: load_timeline(force=True),
-          bg=btn_primary, fg="#ffffff", relief=tk.FLAT, cursor="hand2",
-          font=("Segoe UI", 8, "bold"), activebackground=btn_hover,
-          padx=14, pady=3).pack(side=tk.RIGHT)
 
 tl_body = tk.Frame(main_area, bg=bg_main)
 tl_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))

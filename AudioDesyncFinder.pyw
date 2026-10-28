@@ -1192,7 +1192,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.12"
+APP_VERSION = "3.0.13"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1354,6 +1354,8 @@ class MainWindow(FluentWindow):
         ml = QVBoxLayout(model_card)
         ml.setContentsMargins(14, 10, 14, 12)
         ml.addWidget(StrongBodyLabel("Fitted model"))
+        self.summary = StrongBodyLabel("")
+        ml.addWidget(self.summary)
         self.model_view = TextEdit()
         self.model_view.setReadOnly(True)
         self.model_view.setStyleSheet(
@@ -1568,6 +1570,7 @@ class MainWindow(FluentWindow):
             elif kind == "plan":
                 self.plan = payload
                 self.model_view.setPlainText("\n".join(plan_lines(payload)[:10]))
+                self._update_summary()
                 self._draw()
                 self.btn_export.setEnabled(bool(payload.get("segments")))
             elif kind == "idle":
@@ -1605,6 +1608,27 @@ class MainWindow(FluentWindow):
         except Exception as exc:
             self.ui_queue.put(("log", f"winget failed: {exc}"))
 
+    def _update_summary(self) -> None:
+        """Headline numbers for the current model, in the accent colour."""
+        segments = (self.plan or {}).get("segments") or []
+        if not segments:
+            self.summary.setText("")
+            return
+        first = segments[0]
+        if len(segments) == 1:
+            text = (f"offset {first['offset']:+.2f} ms      "
+                    f"drift {first['slope']:+.3f} ms/s      "
+                    f"atempo {first['atempo']:.6f}      "
+                    f"RMS {first['rms']:.0f} ms")
+        else:
+            text = (f"{len(segments)} segments       "
+                    f"first offset {first['offset']:+.2f} ms       "
+                    f"drift {first['slope']:+.3f} ms/s       "
+                    f"RMS {first['rms']:.0f} ms")
+        self.summary.setText(text)
+        self.summary.setStyleSheet(
+            f"color: {self.accent}; font: 600 11pt 'Segoe UI';")
+
     def apply_palette(self) -> None:
         """Recompute the chart/text colours for the current theme."""
         self.chart_bg = "#ffffff" if LIGHT else "#202020"
@@ -1613,6 +1637,7 @@ class MainWindow(FluentWindow):
         self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
         self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
         self.accent = system_accent_hex()
+        self._update_summary()
         try:
             self.fig.patch.set_facecolor(self.chart_bg)
             self.ax.set_facecolor(self.chart_bg)
@@ -1676,6 +1701,7 @@ class MainWindow(FluentWindow):
                                  slope_hint=self._fps_hint())
         self.plan = plan
         self.model_view.setPlainText("\n".join(plan_lines(plan)[:10]))
+        self._update_summary()
         self._draw()
         self._fill_table()
         self.btn_export.setEnabled(bool(plan.get("segments")))

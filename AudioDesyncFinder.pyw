@@ -1158,9 +1158,25 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.4"
+APP_VERSION = "3.0.5"
+LIGHT = False
 
 ACCENT = "#4cc2ff"
+
+
+def system_is_light() -> bool:
+    """True when Windows uses the light app theme (env var overrides it)."""
+    forced = os.environ.get("ADS_THEME", "").lower()
+    if forced in ("light", "dark"):
+        return forced == "light"
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") as key:
+            return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
+    except Exception:
+        return False
 
 
 def system_accent_hex() -> str:
@@ -1199,6 +1215,11 @@ class MainWindow(FluentWindow):
         self.meta = None
         self.worker = None
         self.accent = system_accent_hex()
+        self.chart_bg = "#ffffff" if LIGHT else "#202020"
+        self.chart_fg = "#39404a" if LIGHT else "#c9cdd2"
+        self.chart_grid = "#00000022" if LIGHT else "#ffffff22"
+        self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
+        self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
         self.stop_event = threading.Event()
         self.ui_queue = queue.Queue()
 
@@ -1261,7 +1282,7 @@ class MainWindow(FluentWindow):
         chart = Card()
         cl = QVBoxLayout(chart)
         cl.setContentsMargins(10, 10, 10, 10)
-        self.fig = Figure(figsize=(6, 3.2), facecolor="#202020")
+        self.fig = Figure(figsize=(6, 3.2), facecolor=self.chart_bg)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setStyleSheet("background:transparent;")
@@ -1294,8 +1315,8 @@ class MainWindow(FluentWindow):
         self.model_view = TextEdit()
         self.model_view.setReadOnly(True)
         self.model_view.setStyleSheet(
-            "TextEdit{background:transparent;border:none;"
-            "color:#cfd4da;font:9pt 'Consolas';}")
+            f"TextEdit{{background:transparent;border:none;"
+            f"color:{self.chart_fg};font:9pt 'Consolas';}}")
         ml.addWidget(self.model_view)
         bottom.addWidget(model_card, 1)
 
@@ -1306,8 +1327,8 @@ class MainWindow(FluentWindow):
         self.log_view = TextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setStyleSheet(
-            "TextEdit{background:transparent;border:none;"
-            "color:#9aa4ae;font:9pt 'Consolas';}")
+            f"TextEdit{{background:transparent;border:none;"
+            f"color:{self.log_fg};font:9pt 'Consolas';}}")
         ll.addWidget(self.log_view)
         bottom.addWidget(log_card, 1)
         outer.addLayout(bottom, 2)
@@ -1569,7 +1590,7 @@ class MainWindow(FluentWindow):
     def _draw(self):
         ax = self.ax
         ax.clear()
-        ax.set_facecolor("#202020")
+        ax.set_facecolor(self.chart_bg)
         if self.points:
             ax.scatter([p["t"] for p in self.points],
                        [p["offset"] for p in self.points],
@@ -1579,18 +1600,20 @@ class MainWindow(FluentWindow):
             y0 = seg["offset"]
             ax.plot([x0, x1], [y0, y0 + seg["slope"] * (x1 - x0)],
                     color="#3ddc97", lw=1.6)
-        ax.axhline(0, color="#666", lw=0.7, ls=":")
-        ax.tick_params(colors="#c9cdd2", labelsize=7)
+        ax.axhline(0, color=self.chart_spine, lw=0.7, ls=":")
+        ax.tick_params(colors=self.chart_fg, labelsize=7)
         for spine in ax.spines.values():
-            spine.set_color("#3a3f45")
-        ax.grid(alpha=0.15, color="white")
-        ax.set_xlabel("Time (s)", color="#c9cdd2", fontsize=8)
-        ax.set_ylabel("Offset (ms)", color="#c9cdd2", fontsize=8)
+            spine.set_color(self.chart_spine)
+        ax.grid(alpha=0.25, color=self.chart_grid)
+        ax.set_xlabel("Time (s)", color=self.chart_fg, fontsize=8)
+        ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
         self.canvas.draw_idle()
 
 
 def main():
-    setTheme(Theme.DARK)
+    global LIGHT
+    LIGHT = system_is_light()
+    setTheme(Theme.LIGHT if LIGHT else Theme.DARK)
     setThemeColor(QColor(system_accent_hex()))
     app = QApplication(sys.argv)
     win = MainWindow()

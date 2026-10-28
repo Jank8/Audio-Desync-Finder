@@ -272,6 +272,14 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.5
+
+- **Light theme fixed**: the palette follows the Windows theme (chart background,
+  axis colours, log and model text). Previously light mode had white text on
+  white cards.
+- Themes switch from one place (`setTheme(Theme.LIGHT/DARK)`) plus a matching
+  chart palette; `ADS_THEME=light|dark` forces one for testing.
+
 ### 3.0.4
 
 - **Back to a single file.** The engine is inlined again into

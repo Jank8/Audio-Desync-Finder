@@ -272,6 +272,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.9
+
+- Window, Step and Min confidence are **plain text fields** now (with an integer
+  validator and a centred value). The Fluent SpinBox control never painted its
+  number, so it was replaced instead of patched.
+
 ### 3.0.8
 
 - **Spin boxes show their values again** - they were squeezed to the arrows only

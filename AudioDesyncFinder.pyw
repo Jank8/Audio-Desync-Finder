@@ -91,7 +91,7 @@ import sys
 import threading
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
@@ -1159,7 +1159,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.8"
+APP_VERSION = "3.0.9"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1253,23 +1253,26 @@ class MainWindow(FluentWindow):
         sl.setContentsMargins(16, 10, 16, 10)
         sl.setSpacing(10)
         sl.addWidget(StrongBodyLabel("Window (s)"))
-        self.spin_window = SpinBox()
-        self.spin_window.setFixedWidth(120)
-        self.spin_window.setRange(10, 180)
-        self.spin_window.setValue(40)
-        sl.addWidget(self.spin_window)
+        self.entry_window = LineEdit()
+        self.entry_window.setText("40")
+        self.entry_window.setFixedWidth(110)
+        self.entry_window.setAlignment(Qt.AlignCenter)
+        self.entry_window.setValidator(QIntValidator(5, 300, self))
+        sl.addWidget(self.entry_window)
         sl.addWidget(StrongBodyLabel("Step (s)"))
-        self.spin_step = SpinBox()
-        self.spin_step.setFixedWidth(120)
-        self.spin_step.setRange(5, 180)
-        self.spin_step.setValue(30)
-        sl.addWidget(self.spin_step)
+        self.entry_step = LineEdit()
+        self.entry_step.setText("30")
+        self.entry_step.setFixedWidth(110)
+        self.entry_step.setAlignment(Qt.AlignCenter)
+        self.entry_step.setValidator(QIntValidator(2, 300, self))
+        sl.addWidget(self.entry_step)
         sl.addWidget(StrongBodyLabel("Min confidence"))
-        self.spin_conf = SpinBox()
-        self.spin_conf.setFixedWidth(120)
-        self.spin_conf.setRange(1, 50)
-        self.spin_conf.setValue(2)
-        sl.addWidget(self.spin_conf)
+        self.entry_conf = LineEdit()
+        self.entry_conf.setText("2")
+        self.entry_conf.setFixedWidth(110)
+        self.entry_conf.setAlignment(Qt.AlignCenter)
+        self.entry_conf.setValidator(QIntValidator(1, 60, self))
+        sl.addWidget(self.entry_conf)
         sl.addWidget(StrongBodyLabel("Signal"))
         self.combo_signal = ComboBox()
         self.combo_signal.addItems(["Auto", "Waveform", "Envelope"])
@@ -1459,8 +1462,8 @@ class MainWindow(FluentWindow):
             rate = 1.0 + hint / 1000.0 if hint and abs(hint) >= 0.3 else 1.0
             scan_tgt = resample_track(tgt, rate) if rate != 1.0 else tgt
             points = scan_arrays(
-                ref, scan_tgt, window=float(self.spin_window.value()),
-                step=float(self.spin_step.value()),
+                ref, scan_tgt, window=self._num(self.entry_window, 40),
+                step=self._num(self.entry_step, 30),
                 mode=("auto" if self.combo_signal.currentIndex() == 0
                       else "waveform" if self.combo_signal.currentIndex() == 1
                       else "envelope"),
@@ -1470,7 +1473,7 @@ class MainWindow(FluentWindow):
                 should_stop=self.stop_event.is_set)
             points = sorted(compensate_points(points, rate), key=lambda p: p["t"])
             plan = build_plan(points, meta["ref_duration"],
-                                     min_conf=float(self.spin_conf.value()),
+                                     min_conf=self._num(self.entry_conf, 2),
                                      slope_hint=hint)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
@@ -1613,6 +1616,14 @@ class MainWindow(FluentWindow):
             pass
         return super().nativeEvent(eventType, message)
 
+    def _num(self, edit, default):
+        """Read an int from a text field, falling back to the default."""
+        try:
+            value = int(str(edit.text()).strip())
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
     def _fill_table(self):
         self.table.setRowCount(len(self.points))
         for i, p in enumerate(self.points):
@@ -1628,7 +1639,7 @@ class MainWindow(FluentWindow):
             return
         del self.points[row]
         plan = build_plan(self.points, self.meta["ref_duration"],
-                                 min_conf=float(self.spin_conf.value()),
+                                 min_conf=self._num(self.entry_conf, 2),
                                  slope_hint=self._fps_hint())
         self.plan = plan
         self.model_view.setPlainText("\n".join(plan_lines(plan)[:10]))

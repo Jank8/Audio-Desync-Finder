@@ -10,13 +10,13 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
-                               QLabel, QVBoxLayout, QWidget)
+                               QLabel, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
-                            LineEdit, MessageBox, PrimaryPushButton,
-                            ProgressBar, PushButton, RadioButton,
-                            SpinBox, StrongBodyLabel, TextEdit, Theme,
-                            setTheme)
+                            InfoBar, InfoBarPosition, LineEdit, MessageBox,
+                            PrimaryPushButton, ProgressBar, PushButton,
+                            RadioButton, SpinBox, StrongBodyLabel, TableWidget,
+                            TextEdit, Theme, setTheme)
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -25,7 +25,7 @@ from matplotlib.figure import Figure
 import sync_engine as engine
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0"
+APP_VERSION = "3.0.1"
 
 ACCENT = "#4cc2ff"
 
@@ -116,7 +116,23 @@ class MainWindow(FluentWindow):
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setStyleSheet("background:transparent;")
-        cl.addWidget(self.canvas)
+        row = QHBoxLayout()
+        row.addWidget(self.canvas, 3)
+        self.table = TableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Time (s)", "Offset (ms)", "Conf", "Source"])
+        self.table.verticalHeader().hide()
+        self.table.setBorderVisible(True)
+        self.table.setBorderRadius(6)
+        row.addWidget(self.table, 2)
+        cl.addLayout(row)
+        bar = QHBoxLayout()
+        bar.addStretch(1)
+        self.btn_del = PushButton("Delete selected point")
+        self.btn_del.clicked.connect(self.delete_point)
+        bar.addWidget(self.btn_del)
+        cl.addLayout(bar)
         outer.addWidget(chart, 3)
 
         # ---------------- model + log -----------------------------------
@@ -303,6 +319,7 @@ class MainWindow(FluentWindow):
                 log=lambda m, tag="info": self.ui_queue.put(("log", m)),
                 should_stop=self.stop_event.is_set)
             self.ui_queue.put(("log", f"✓ Saved: {path}"))
+            self.ui_queue.put(("notify", (path, True)))
             residual = engine.measure_residual(self._ordered_paths()[0], path)
             if residual:
                 for line in engine.format_residual(residual).splitlines():
@@ -325,8 +342,12 @@ class MainWindow(FluentWindow):
                 pct, text = payload
                 self.progress.setValue(int(pct))
                 self.status.setText(text)
+            elif kind == "notify":
+                path, ok = payload
+                self._notify("Export complete", os.path.basename(path), ok)
             elif kind == "points":
                 self.points = payload
+                self._fill_table()
             elif kind == "plan":
                 self.plan = payload
                 self.model_view.setPlainText("\n".join(engine.plan_lines(payload)[:10]))
@@ -336,6 +357,35 @@ class MainWindow(FluentWindow):
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)
                 self.progress.setValue(100 if self.plan else 0)
+
+    def _fill_table(self):
+        self.table.setRowCount(len(self.points))
+        for i, p in enumerate(self.points):
+            source = "manual" if p.get("kind") == "manual" else (
+                "wave" if p.get("mode") == "w" else "env")
+            for col, text in enumerate((f"{p['t']:.1f}", f"{p['offset']:+.1f}",
+                                        f"{p.get('conf', 0):.1f}", source)):
+                self.table.setItem(i, col, QTableWidgetItem(text))
+
+    def delete_point(self):
+        row = self.table.currentRow()
+        if not (0 <= row < len(self.points)) or not self.meta:
+            return
+        del self.points[row]
+        plan = engine.build_plan(self.points, self.meta["ref_duration"],
+                                 min_conf=float(self.spin_conf.value()),
+                                 slope_hint=self._fps_hint())
+        self.plan = plan
+        self.model_view.setPlainText("\n".join(engine.plan_lines(plan)[:10]))
+        self._draw()
+        self._fill_table()
+        self.btn_export.setEnabled(bool(plan.get("segments")))
+
+    def _notify(self, title, content, ok=True):
+        (InfoBar.success if ok else InfoBar.error)(
+            title=title, content=content, orient=Qt.Horizontal,
+            isClosable=True, position=InfoBarPosition.TOP_RIGHT,
+            duration=4000, parent=self)
 
     def _draw(self):
         ax = self.ax

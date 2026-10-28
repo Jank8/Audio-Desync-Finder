@@ -273,6 +273,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.1
+
+- Measurement table next to the chart: time, offset, confidence and source for
+  every point, with **Delete selected point** re-fitting the model instantly.
+- Fluent `InfoBar` notification when an export finishes.
+
 ### 3.0
 
 - **New UI: PySide6 + Fluent Widgets** with a real Windows 11 **Mica** backdrop,

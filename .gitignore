@@ -1,1 +1,4 @@
 rename_movie.py
+__pycache__/
+*.pyc
+backups/

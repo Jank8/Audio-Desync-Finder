@@ -9,10 +9,13 @@ A precise, lightweight GUI utility written in Python to detect, analyze, and cal
 - **Advanced Signal Preprocessing** – Removes DC offset, normalises amplitudes, and applies a **4th-order Butterworth bandpass filter (100 Hz – 8 kHz)** to eliminate background rumble and high-frequency noise, isolating human speech and distinct transients for maximum accuracy.
 - **Sub-Sample Precision** – Uses FFT-based cross-correlation combined with **parabolic peak interpolation** to determine the delay down to a fraction of a millisecond (well below the ~0.022 ms sample-rate limit of 44.1 kHz audio).
 - **Interactive Waveform View** – Embedded dark-themed Matplotlib chart with zoom in/out, timeline scrolling, and live manual offset preview.
+- **Whole-Track Timeline Sync** – Scans the entire runtime in one pass, plots offset vs. time, automatically detects edits (different intro, missing scene) and tempo drift, and exports a single corrected track that fixes all of them.
 - **Pre-Offset Support** – Independent per-file time offsets let you account for known timecode differences before running the correlation; the tool automatically adds them back into the reported total adjustment.
-- **Graceful Error Handling** – Missing FFmpeg or Python packages are detected at startup with clear, actionable dialog messages instead of cryptic tracebacks.
+- **Graceful Error Handling** – If the automatic installers cannot run (offline, no winget, restricted Python), the exact manual command and the installer log are shown instead of a cryptic traceback.
+- **Automatic Dependency Installation** – On first launch the program checks for `numpy`, `scipy` and `matplotlib`; any that are missing are installed with `pip` automatically, with live output in a progress window. No terminal, no manual `pip install` step.
+- **Automatic FFmpeg Setup** – If FFmpeg is missing it is installed with `winget` on startup, no button or confirmation needed. `PATH` is re-read from the registry, so a fresh install works immediately, without restarting the app.
 - **No Console Window** – Ships as a `.pyw` file; the Win32 console handle is suppressed explicitly so the tool behaves as a pure GUI application.
-- **Built-in Console Panel** – A live log column on the right shows FFmpeg commands, extraction progress, correlation status, and results. Also hosts the one-click FFmpeg installer if FFmpeg is missing.
+- **Built-in Console Panel** – A live log column on the right shows FFmpeg commands, extraction progress, correlation status, and results. The same panel streams the automatic dependency and FFmpeg installers.
 
 ---
 
@@ -20,13 +23,35 @@ A precise, lightweight GUI utility written in Python to detect, analyze, and cal
 
 | Requirement | Notes |
 |---|---|
-| **Python 3.8+** | Tested with 3.10 and 3.11 |
-| **FFmpeg** | Must be available in `PATH` (`ffmpeg.exe` on Windows) |
-| **numpy** | Signal data handling |
-| **scipy** | Bandpass filtering and FFT cross-correlation |
-| **matplotlib** | Embedded waveform chart (TkAgg backend) |
+| **Python 3.8+** | Tested with 3.10, 3.11 and 3.13 |
+| **FFmpeg** | Installed automatically via `winget` when missing (see below) |
+| **numpy**, **scipy**, **matplotlib** | Installed automatically on first launch (see below) |
 
-Install the Python packages with:
+### Automatic installation
+
+You do **not** need to run `pip install` by hand. On startup the program checks
+for `numpy`, `scipy` and `matplotlib`; whatever is missing is installed with
+`pip` while a small window streams the installer output. The main window opens
+as soon as the packages are ready.
+
+The installer tries, in order, until one succeeds:
+
+1. `pip install <packages>` — normal install, respects an active virtualenv
+2. `pip install --user <packages>` — used when `site-packages` is not writable
+3. `--user --break-system-packages` — only on Linux/macOS (PEP 668 systems)
+
+If `pip` itself is absent, `ensurepip` bootstraps it first. When automatic
+installation is impossible (offline machine, frozen executable, restricted
+Python), a dialog with the exact manual command is shown instead.
+
+To disable the automatic installer — e.g. for diagnostics or to manage the
+packages yourself — set an environment variable before launching:
+
+```
+set ADS_SKIP_DEP_INSTALL=1
+```
+
+Manual install, if you prefer it:
 
 ```
 pip install numpy scipy matplotlib
@@ -38,7 +63,16 @@ Install FFmpeg (if not already present):
 winget install --id Gyan.FFmpeg -e
 ```
 
-Alternatively, the app will offer to install FFmpeg automatically via winget when it starts up — a banner with an **Install FFmpeg** button will appear in the console panel if FFmpeg is not found in PATH.
+FFmpeg is installed **automatically**, no button and no confirmation step: if
+none is found at startup, the app runs the winget command above and streams its
+output into the console panel. Detection is repeated before every analysis, and
+`PATH` is re-read from the registry each time, so an FFmpeg installed by a
+just-finished winget run — or one you installed yourself outside the app — is
+picked up immediately, without restarting the program.
+
+If winget is unavailable or the install fails, the console panel shows the
+exact manual command; the app stays usable and will use FFmpeg as soon as it
+appears on `PATH`.
 
 ---
 
@@ -52,6 +86,140 @@ Alternatively, the app will offer to install FFmpeg automatically via winget whe
 6. Click **⚡ ANALYZE**.
 7. Read the offset result in the right-hand panel. The waveform chart shows both signals aligned according to the detected lag.
 8. Use the **Manual offset** field to fine-tune the visual alignment and confirm it looks right before applying the value to your video editor.
+
+---
+
+## 🕒 Timeline Sync – whole-track analysis
+
+The single-point workflow answers *"what is the offset here?"*. Real releases
+often need more: different intros, removed scenes, re-timed recaps, or a target
+that slowly drifts against the reference. **Timeline Sync** handles all of that.
+
+Open it with **🔬 Timeline Sync (multi-point)** in the controls panel. The
+window takes the two files already selected in the main window (*Base* = the
+reference, the other = the target that gets corrected).
+
+### The workflow
+
+1. **⚡ Auto-scan whole file** – both soundtracks are decoded once to 16 kHz
+   and the offset is measured at every *Step* seconds using a *Window*-second
+   clip. A 2-hour film takes a few seconds; a 3-minute clip under one.
+2. Look at the **offset-over-time chart**. Each blue point is one measurement,
+   the green line is the fitted model, dashed orange lines mark edits.
+3. **Click anywhere on the chart** to measure the offset at that moment, or
+   type a time and a known offset and press **Add manual point** (useful when
+   you already know e.g. "0 ms at 10 s, −1200 ms after the recap").
+4. Check the **Fitted model** table – one row per segment, with its start
+   offset, drift and resulting `atempo`.
+5. **⬇ Export corrected audio…** writes a new file with all corrections
+   applied. The original is never modified.
+
+**Nothing freezes while it works.** Scanning and exporting run in background
+threads, and the progress bar is fed by FFmpeg's own `-progress` output, so it
+moves continuously through both export passes with the elapsed time next to it
+(`47% – 61s`). The **Stop** button aborts a scan *or* an export in progress, and
+the log stays live the whole time (worker threads never touch Tk directly –
+messages are queued and flushed on the UI thread).
+
+### How the model is read
+
+| Measured | Meaning | Correction |
+|---|---|---|
+| offset > 0 | target is late at that moment | audio is advanced |
+| drift > 0 | target gets later and later (plays slower) | `atempo = 1 + drift/1000` |
+| jump > 0 | target has extra content (longer intro, inserted scene) | that stretch is skipped |
+| jump < 0 | target is missing content | silence is inserted |
+
+Points whose correlation peak is not clearly unique (silence, different
+dubbing, heavy noise) get a low **Conf** value and are ignored by the fit;
+adjust *Min confidence* to be stricter or more forgiving. The window is fully
+interactive – delete points, disable them with **Enable/Disable**, or add your
+own; the model and the chart update immediately.
+
+**Save plan…** / **Load plan…** store the measurements and the fitted model as
+JSON, so a long analysis does not have to be repeated.
+
+### Two language versions (dubs)
+
+Comparing two dubs is the normal case for this tool, and it is the hardest one:
+the dialogue is re-recorded, so the waveform is *unrelated* even though the
+music, the effects and the timing of the lines are identical.
+
+The **Signal** selector controls how the two tracks are compared:
+
+| Mode | Compares | Best for |
+|---|---|---|
+| **Waveform** | the actual samples | same source, music, effects, trailers |
+| **Envelope (dubs)** | loudness over time (10 ms steps) | different languages, different voice actors |
+| **Auto** *(default)* | waveform first, envelope as fallback | everything |
+
+Auto uses the waveform result when it is convincing (a sharp, unique peak) and
+switches to the envelope when it is not – typically in dialogue scenes with no
+shared music, where waveform correlation produces noise but the rhythm of the
+lines still matches. The **Source** column of the measurement table shows
+`wave` or `env` for every point, so you always know which method produced it.
+
+Practical notes for dubs:
+
+- Use 40–60 s windows. Longer windows collect more shared music and effects.
+- Music and action scenes give the most reliable points; pure dialogue is
+  usually 5–10 ms less precise but still far below one video frame (40 ms).
+- If a whole section ends up below the confidence threshold, raise the window
+  size before lowering *Min confidence*.
+
+### Drift compensation (automatic)
+
+A tempo difference smears the correlation peak across the whole window, which
+is exactly what makes "the speed is slightly off" cases unreliable. After the
+first pass the app therefore resamples the target to the reference speed and
+scans again; the peaks become sharp and the fitted drift is accurate to a few
+hundredths of a ms/s. The measurements are converted back to the original
+timeline, so the export still works on the untouched target.
+
+Typical results on a synthetic 5-minute target with a 10 ms/s drift:
+first pass ±100 ms (one point completely wrong), after compensation **±2 ms**
+and a drift estimate of 10.097 vs. 10.101 ms/s true.
+
+> Very large speed-ups (PAL 25 → 23.976 fps is ≈ 43 ms/s) smear a window so
+> badly that the first pass may not lock at all. In that case add two manual
+> points (e.g. 0 ms at 60 s and the known offset at the end), or compare a
+> shorter, music-heavy section first.
+
+### Framerate hint (optional, but recommended)
+
+If you know both framerates, type them into the **Framerate** row of the scan
+bar. Two things happen:
+
+1. **The scan starts speed-compensated.** A PAL/NTSC difference
+   (25 vs 23.976 fps ≈ 43 ms/s) smears a 40 s window beyond recognition, so
+   without the hint the first pass simply cannot lock. With it, the target is
+   resampled up front and only the small residual has to be measured.
+2. **The drift is locked to the exact ratio.** When the fitted slope is close
+   to `fps_ref / fps_target`, the model snaps to that rational value, which is
+   far more precise than a regression on noisy measurements. Over a two-hour
+   film a slope error of 0.05 ms/s is 360 ms of drift at the end.
+
+Example: reference 23.976 fps, target 25 fps →
+
+```
+offset  +399.90 ms      drift  -40.9600 ms/s      atempo  0.95904000
+```
+
+The correction factor is always exactly `fps_ref / fps_target`, so the export
+does not depend on the quality of the fit for the tempo part.
+
+Leave both fields empty when the framerates are equal. If the hint does not fit
+the material (e.g. a re-timed master), the app notices that the pre-warped scan
+found almost nothing, re-runs it without the hint and keeps the measured drift.
+
+### Practical tips
+
+- 40 s windows / 30 s steps are a good default. Use shorter windows when the
+  target has many cuts, longer ones when the audio is noisy.
+- Around every detected jump the app automatically re-measures with 6 s
+  windows, so the export cuts in the right place.
+- If a segment looks wrong, drop the offending points and add two manual ones
+  on either side of the problem area.
 
 ---
 
@@ -100,6 +268,23 @@ Audio Desync Finder/
 ```
 
 ---
+
+## 📜 Changelog
+
+### 1.0 – first stable release
+
+- **Automatic dependency installation** – missing Python packages are installed
+  with pip on first launch, FFmpeg with winget; nothing has to be set up by hand.
+- **Timeline Sync** – whole-track scan, offset curve, automatic detection of
+  edits (jumps) and drift, piecewise-linear model, one-click export.
+- **Dub-aware comparison** – energy-envelope mode for two different language
+  versions, chosen automatically when waveform correlation is not convincing.
+- **Framerate hint** – a known fps pair (e.g. 23.976 / 25) pre-compensates the
+  scan and locks `atempo` to the exact rational ratio.
+- **Matroska Audio output** – exports are always `.mka`, with a measured
+  residual offset reported after each export.
+- **Responsive tabbed UI** – Quick sync and Timeline tabs, shared console and
+  progress bar, live FFmpeg progress and a working Stop button.
 
 ## 📄 License
 

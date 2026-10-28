@@ -36,7 +36,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 # ---------------------------------------------------------------------------
 # HIDE CONSOLE WINDOW
@@ -4218,8 +4218,21 @@ def load_timeline(force: bool = False) -> None:
             pass
         _timeline_panel = None
     _timeline_panel = TimelinePanel(tl_body, ref, target)
-    tl_info.config(text=f"Reference: {os.path.basename(ref)}    →    "
-                        f"Target to correct: {os.path.basename(target)}")
+
+    ref_fps = _timeline_panel.var_fps_ref.get()
+    tgt_fps = _timeline_panel.var_fps_tgt.get()
+    fps_note = ""
+    if ref_fps and tgt_fps:
+        fps_note = f"     [{ref_fps} fps  →  {tgt_fps} fps"
+        try:
+            ratio = float(ref_fps) / float(tgt_fps)
+            if abs(ratio - 1.0) > 1e-5:
+                fps_note += f", speed {ratio:.6f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+        fps_note += "]"
+    tl_info.config(text=f"Reference: {os.path.basename(ref)}   →   "
+                        f"Target: {os.path.basename(target)}{fps_note}")
     console_log(f"Timeline loaded: reference={os.path.basename(ref)}  "
                 f"target={os.path.basename(target)}", "info")
 
@@ -4251,71 +4264,42 @@ def show_tips():
              font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 8))
 
     tips_content = (
-        "RESULTS EXPLAINED:\n"
-        "  X late/early  – measured offset at your chosen analysis point\n"
-        "  Delay X ms    – apply as delay in muxer/player to fix sync\n"
-        "                  positive = shift audio forward in time\n"
-        "  Drift ms/s    – desync growth rate per second\n"
-        "  atempo        – speed correction factor\n"
-        "  Initial offset – starting offset at t=10s (from linear fit)\n"
-        "  R²            – fit quality (1.0 = perfect, >0.95 = good)\n"
+        "QUICK SYNC – one offset at a time\n"
+        "  1. Pick File 1 / File 2 and mark the one you KEEP as Base\n"
+        "  2. Start time + Duration (30–60 s of dialogue or music)\n"
+        "  3. ANALYZE → offset is measured and drawn on the chart\n"
+        "  4. Manual offset only nudges the chart for a visual check\n"
         "\n"
-        "WORKFLOW:\n"
-        "  1. Select any point in the file for quick offset check\n"
-        "  2. Run analysis to see if files are in sync\n"
-        "  3. If sync drifts over time, enable 'Check drift'\n"
-        "  4. Drift check measures automatically at multiple points\n"
-        "  5. Use Export to apply atempo + initial offset correction\n"
+        "TIMELINE – the whole track\n"
+        "  • Auto-scan measures the offset every Step seconds\n"
+        "  • Framerate is detected automatically and the drift hint\n"
+        "    is filled in for you (e.g. 23.976 vs 25 = PAL)\n"
+        "  • Click the chart to measure that exact moment\n"
+        "  • Add manual point: a time plus a known offset\n"
+        "  • The model lists one row per segment: offset, drift, atempo\n"
+        "  • Export writes Matroska Audio (.mka), then measures it and\n"
+        "    re-exports aligned if more than 3 ms is left\n"
         "\n"
-        "FOR BEST ACCURACY:\n"
-        "  • Pick a clip with clear speech or sharp sounds\n"
-        "  • 30–60 seconds duration recommended\n"
-        "  • Avoid silence, ambient noise, or multilingual audio\n"
+        "READING THE NUMBERS\n"
+        "  offset   + target late      − target early\n"
+        "  drift    ms/s; positive = target gets later (plays slower)\n"
+        "  atempo   1 + drift/1000, locked to the exact fps ratio\n"
+        "  jump     edit in the target: + extra content (skipped),\n"
+        "           − missing content (silence inserted)\n"
         "\n"
-        "DRIFT CHECK (AUTOMATIC MULTI-POINT):\n"
-        "  • Measures at START (t=10s)\n"
-        "  • Adds 1-4 intermediate points based on file length\n"
-        "  • Measures at 95% (avoids subtitle/outro silence)\n"
-        "  • Measures at END (last safe point)\n"
-        "  • Uses linear regression for best-fit drift rate\n"
-        "  • All measurements use your Duration setting\n"
-        "  • Your 'Start time' setting is ignored during drift check\n"
-        "  • Requires file >2 minutes, shows R² fit quality\n"
+        "TYPICAL WORKFLOW\n"
+        "  1. Quick tab: select both files, Base on the one you keep\n"
+        "  2. Timeline tab → Auto-scan whole file\n"
+        "  3. Check the points and the model, delete the bad ones\n"
+        "  4. Export → mux the .mka into the video, no delay needed\n"
         "\n"
-        "MANUAL DRIFT:\n"
-        "  • Enter two known timestamps with their offsets\n"
-        "  • Works on a single file, no reference needed\n"
-        "  • If audio starts in sync: t=10, offset=0 as first point\n"
-        "  • Click Calculate → then Export\n"
-        "\n"
-        "TIMELINE SYNC (WHOLE TRACK):\n"
-        "  • Button: 🔬 Timeline Sync (multi-point)\n"
-        "  • Auto-scan measures the offset every N seconds\n"
-        "  • Chart: click anywhere to measure that moment\n"
-        "  • 'Add manual point' accepts t + known offset\n"
-        "  • Detects jumps (edits) and drift, fits segments\n"
-        "  • Export applies atempo per segment + cuts/pads\n"
-        "    → one corrected file for the whole runtime\n"
-        "  • Save/Load plan keeps the measurements as JSON\n"
-        "\n"
-        "TWO LANGUAGE VERSIONS (DUBS):\n"
-        "  • Dialogue is re-recorded, so waveform matching\n"
-        "    fails in scenes without shared music/effects\n"
-        "  • Signal = Auto: waveform when convincing,\n"
-        "    envelope (loudness rhythm) as the fallback\n"
-        "  • Signal = Envelope forces that mode everywhere\n"
-        "  • Source column shows 'wave' or 'env' per point\n"
-        "  • Prefer 40–60 s windows for dub comparisons\n"
-        "\n"
-        "FRAMERATE HINT (OPTIONAL):\n"
-        "  • Enter both framerates (e.g. 23.976 / 25)\n"
-        "  • The scan starts already speed-compensated, so\n"
-        "    a PAL/NTSC jump (~43 ms/s) can be measured\n"
-        "  • The drift is then locked to the exact ratio\n"
-        "    atempo = fps_ref / fps_target (no fit noise)\n"
-        "  • Leave empty when both files have the same fps"
+        "GOOD MEASUREMENTS\n"
+        "  • 40–60 s windows with 30 s steps are a good default\n"
+        "  • Music and effects give the strongest matches\n"
+        "  • Orange points are below Min confidence and are ignored\n"
+        "  • verify & auto-align doubles export time – uncheck it\n"
+        "    if you want a single quick pass"
     )
-
     txt = tk.Label(popup, text=tips_content,
                    bg="#1a1a1a", fg="#aaaaaa",
                    font=("Segoe UI", 9), justify=tk.LEFT, anchor=tk.W)

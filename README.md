@@ -271,6 +271,13 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 1.0.2
+
+- Help window rewritten for the current workflow (Quick sync, Timeline,
+  auto-detected framerate, self-aligning MKA export).
+- Timeline header shows both framerates and the resulting speed ratio.
+- Version numbers now follow 1.0.x with x incrementing on every change.
+
 ### 1.0.1
 
 - **Self-aligning export** – the produced file is measured and, if more than

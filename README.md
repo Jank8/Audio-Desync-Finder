@@ -271,6 +271,15 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 2.0
+
+- **One screen** - the Quick tab and its single-point analyzer are gone. The
+  file bar sits at the top and the Timeline panel takes the whole window.
+- **Sun Valley (sv-ttk) dark theme** - native Windows 11 look for the ttk
+  widgets, with the palette retuned to match.
+- Picking both files loads the timeline automatically; framerates, drift hint
+  and the self-aligning export work exactly as before.
+
 ### 1.0.3
 
 - Framerate shown next to each file name in the Timeline header, so it is

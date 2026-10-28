@@ -35,8 +35,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 
+try:
+    import sv_ttk
+except ImportError:
+    sv_ttk = None
+
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "1.0.3"
+APP_VERSION = "2.0"
+_timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
 # HIDE CONSOLE WINDOW
@@ -940,7 +946,7 @@ def _apply_ffmpeg_found(path: str) -> None:
     _register_ffmpeg(path)
     ffmpeg_ready = True
     console_log(f"✓ FFmpeg ready: {path}", "ok")
-    btn_analyze.config(state=tk.NORMAL)
+    pass    # analyze button removed in 2.0
 
 
 def _ffmpeg_install_failed(reason: str) -> None:
@@ -955,7 +961,7 @@ def _ffmpeg_install_failed(reason: str) -> None:
     console_log("   Analysis needs FFmpeg. Install it manually, then click ANALYZE again:", "warn")
     console_log("     winget install --id Gyan.FFmpeg -e", "cmd")
     console_log("   or download it from  https://ffmpeg.org/download.html", "info")
-    btn_analyze.config(state=tk.NORMAL)
+    pass    # analyze button removed in 2.0
 
 
 def _install_ffmpeg_worker() -> None:
@@ -1022,7 +1028,7 @@ def ensure_ffmpeg() -> None:
 
     console_log("⚠  FFmpeg was not found – installing it automatically via winget…", "warn")
     console_log("   FFmpeg is required to extract audio from media files.", "info")
-    btn_analyze.config(state=tk.DISABLED)
+    pass    # analyze button removed in 2.0
     threading.Thread(target=_install_ffmpeg_worker, daemon=True).start()
 
 
@@ -1665,6 +1671,16 @@ def reset_zoom() -> None:
     viz_data['zoom_end'] = len(viz_data['data1'])
     update_visualization()
 
+
+
+def _maybe_load_timeline() -> None:
+    """(Re)build the timeline as soon as both files are chosen."""
+    if entry_file1.get().strip() and entry_file2.get().strip():
+        try:
+            load_timeline(force=True)
+        except Exception:
+            pass
+
 def select_file1() -> None:
     """Open a file-chooser dialog and populate the File 1 path entry widget."""
     f = filedialog.askopenfilename(
@@ -1679,6 +1695,7 @@ def select_file1() -> None:
     if f:
         entry_file1.delete(0, tk.END)
         entry_file1.insert(0, f)
+        _maybe_load_timeline()
 
 
 def select_file2() -> None:
@@ -1695,6 +1712,7 @@ def select_file2() -> None:
     if f:
         entry_file2.delete(0, tk.END)
         entry_file2.insert(0, f)
+        _maybe_load_timeline()
 
 def _run_analyze_sync_thread() -> None:
     """Worker thread for analyze_sync – runs FFmpeg and correlation off the main thread."""
@@ -1706,7 +1724,7 @@ def _run_analyze_sync_thread() -> None:
             label_status.config(text="✗ Error occurred during analysis", fg="#ff4444"),
             label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888"),
             console_log(f"✗ Analysis failed: {e}", "error"),
-            btn_analyze.config(state=tk.NORMAL),
+            None,   # analyze button removed in 2.0
             clear_progress()
         ))
 
@@ -1720,7 +1738,7 @@ def analyze_sync() -> None:
     if not file1 or not file2:
         messagebox.showerror("Error", "Select both audio/video files!")
         return
-    btn_analyze.config(state=tk.DISABLED)
+    pass    # analyze button removed in 2.0
     import threading
     threading.Thread(target=_run_analyze_sync_thread, daemon=True).start()
 
@@ -2045,7 +2063,7 @@ def _analyze_sync_impl() -> None:
                 label_result._init_off = float(offset_ms)
             label_result.config(text=_res, fg=_color)
             label_status.config(text="✓ Analysis completed successfully", fg="#00ff88")
-            btn_analyze.config(state=tk.NORMAL)
+            pass    # analyze button removed in 2.0
             set_progress(100, "Done")
             entry_manual_offset.delete(0, tk.END)
             entry_manual_offset.insert(0, str(offset_ms))
@@ -2070,7 +2088,7 @@ def _analyze_sync_impl() -> None:
             label_status.config(text="✗ Error occurred during analysis", fg="#ff4444"),
             label_result.config(text="Could not analyze files.\nCheck if they are valid.", fg="#888888"),
             console_log(f"✗ Analysis failed: {_err}", "error"),
-            btn_analyze.config(state=tk.NORMAL),
+            None,   # analyze button removed in 2.0
             clear_progress()
         ))
 
@@ -3877,6 +3895,8 @@ class TimelinePanel:
 # visible when FFmpeg is not found at startup.
 # ===========================================================================
 root = tk.Tk()
+if sv_ttk is not None:
+    sv_ttk.set_theme("dark")
 root.title(f"{APP_NAME} {APP_VERSION} – precise audio offset detection")
 root.geometry("1680x940")
 root.minsize(1180, 700)
@@ -3951,36 +3971,23 @@ def clear_progress() -> None:
         _ui_queue.put(("progress", (0, "")))
 
 # ---------------------------------------------------------------------------
-# SHELL: shared notebook + shared bottom area
+# SHELL: shared bottom area
 # The file pickers live in the Quick tab; the console and the progress bar are
 # shared by both tabs so long jobs look the same everywhere.
 # ---------------------------------------------------------------------------
-_nb_style = ttk.Style(root)
-_nb_style.configure("Ads.TNotebook", background=bg_main, borderwidth=0,
-                    tabmargins=(0, 6, 0, 0))
-_nb_style.configure("Ads.TNotebook.Tab", background="#2a2a2a", foreground="#9aa0a6",
-                    padding=(20, 8), borderwidth=0, font=("Segoe UI", 9, "bold"))
-_nb_style.map("Ads.TNotebook.Tab",
-              background=[("selected", bg_panel), ("active", "#343434")],
-              foreground=[("selected", "#4a9eff"), ("active", "#ffffff")])
-
 console_host = tk.Frame(root, bg="#0d0d0d", height=132)
 console_host.pack(side=tk.BOTTOM, fill=tk.X)
 console_host.pack_propagate(False)
 
-notebook = ttk.Notebook(root, style="Ads.TNotebook")
-notebook.pack(fill=tk.BOTH, expand=True)
+main_area = tk.Frame(root, bg=bg_main)
+main_area.pack(fill=tk.BOTH, expand=True)
 
-quick_tab = tk.Frame(notebook, bg=bg_main)
-timeline_tab = tk.Frame(notebook, bg=bg_main)
-notebook.add(quick_tab, text="   Quick sync   ")
-notebook.add(timeline_tab, text="   Timeline   ")
 
 # ---------------------------------------------------------------------------
 # MAIN CONTAINER + TOP ROW (files + parameters)
 # ---------------------------------------------------------------------------
-main_container = tk.Frame(quick_tab, bg=bg_main)
-main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 4))
+main_container = tk.Frame(main_area, bg=bg_main)
+main_container.pack(fill=tk.X, padx=20, pady=(16, 6))
 
 # === TOP ROW: Files + Parameters ===
 top_row = tk.Frame(main_container, bg=bg_main)
@@ -4039,290 +4046,6 @@ tk.Radiobutton(file2_container, text="Base", variable=ref_var, value=2, bg=bg_pa
                fg=fg_dim, selectcolor=bg_panel, activebackground=bg_panel,
                font=("Segoe UI", 9)).pack(side=tk.LEFT)
 
-# PARAMETERS SECTION
-params_frame = tk.LabelFrame(top_row, text=" Analysis Parameters ", bg=bg_panel, fg=fg_accent,
-                              font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2)
-params_frame.pack(side=tk.LEFT, fill=tk.Y)
-
-params_inner = tk.Frame(params_frame, bg=bg_panel)
-params_inner.pack(padx=20, pady=15)
-
-# Start time
-start_container = tk.Frame(params_inner, bg=bg_panel)
-start_container.pack(side=tk.LEFT, padx=(0, 15))
-tk.Label(start_container, text="Start time:", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 9)).pack()
-entry_start = tk.Entry(start_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                       relief=tk.FLAT, font=("Segoe UI", 10), justify=tk.CENTER, width=12)
-entry_start.insert(0, "00:00:00")
-entry_start.pack(ipady=5, pady=3)
-tk.Label(start_container, text="(HH:MM:SS)", bg=bg_panel, fg="#666666",
-         font=("Segoe UI", 7)).pack()
-
-# Duration
-duration_container = tk.Frame(params_inner, bg=bg_panel)
-duration_container.pack(side=tk.LEFT)
-tk.Label(duration_container, text="Duration (sec):", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 9)).pack()
-entry_duration = tk.Entry(duration_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                          relief=tk.FLAT, font=("Segoe UI", 10), justify=tk.CENTER, width=12)
-entry_duration.insert(0, "30")
-entry_duration.pack(ipady=5, pady=3)
-tk.Label(duration_container, text="(30-60 rec.)", bg=bg_panel, fg="#666666",
-         font=("Segoe UI", 7)).pack()
-
-# === BOTTOM ROW: Chart | Controls | Console ===
-bottom_row = tk.Frame(main_container, bg=bg_main)
-bottom_row.pack(fill=tk.BOTH, expand=True)
-
-# ── LEFT: Waveform chart ────────────────────────────────────────────────────
-chart_frame = tk.LabelFrame(bottom_row, text=" 📊 Waveform Visualization ", bg=bg_panel,
-                            fg=fg_accent, font=("Segoe UI", 10, "bold"),
-                            relief=tk.GROOVE, bd=2)
-chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-
-canvas_container = tk.Frame(chart_frame, bg=bg_panel)
-canvas_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
-
-fig = Figure(figsize=(10, 6), dpi=90, facecolor='#1a1a1a')
-ax = fig.add_subplot(111)
-ax.set_facecolor('#1a1a1a')
-canvas = FigureCanvasTkAgg(fig, master=canvas_container)
-canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-# Horizontal scrollbar for zoomed view
-scrollbar_frame = tk.Frame(chart_frame, bg=bg_panel, height=25)
-scrollbar_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
-scrollbar_frame.pack_propagate(False)
-
-scrollbar = tk.Scale(scrollbar_frame, from_=0, to=100, orient=tk.HORIZONTAL,
-                     command=on_scroll, showvalue=False, bg=bg_panel, fg=fg_accent,
-                     troughcolor=bg_input, highlightthickness=0, relief=tk.FLAT,
-                     activebackground=fg_accent, sliderrelief=tk.FLAT, bd=0)
-scrollbar.pack(fill=tk.BOTH, expand=True)
-
-viz_data['fig'] = fig
-viz_data['ax'] = ax
-viz_data['canvas'] = canvas
-viz_data['scrollbar'] = scrollbar
-viz_data['scrollbar_frame'] = scrollbar_frame
-
-# ── MIDDLE: Controls panel ──────────────────────────────────────────────────
-control_panel = tk.LabelFrame(bottom_row, text=" Controls ", bg=bg_panel, fg=fg_accent,
-                              font=("Segoe UI", 10, "bold"), relief=tk.GROOVE, bd=2, width=300)
-control_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-control_panel.pack_propagate(False)
-
-# Controls panel - plain frame: with the console in the shared bottom bar
-# everything fits without scrolling (no nested canvas, no wheel hijacking).
-controls_inner = tk.Frame(control_panel, bg=bg_panel)
-controls_inner.pack(fill=tk.BOTH, expand=True, padx=18, pady=16)
-
-# ANALYZE BUTTON
-btn_analyze = tk.Button(controls_inner, text="⚡ ANALYZE", command=analyze_sync,
-                        bg=btn_success, fg=fg_main, relief=tk.FLAT, cursor="hand2",
-                        font=("Segoe UI", 12, "bold"), activebackground="#23923d")
-btn_analyze.pack(fill=tk.X, ipady=15, pady=(0, 15))
-
-# RESULTS SECTION
-result_section = tk.Frame(controls_inner, bg=bg_panel)
-result_section.pack(fill=tk.X, pady=(0, 15))
-
-label_status = tk.Label(result_section, text="● Ready to analyze", bg=bg_panel, fg="#888888",
-                        font=("Segoe UI", 9), anchor=tk.W)
-label_status.pack(fill=tk.X, pady=(0, 8))
-
-label_result = tk.Label(result_section, text="Waiting for analysis...", bg=bg_panel, fg=fg_dim,
-                        font=("Segoe UI", 9, "bold"), anchor=tk.W, wraplength=260, justify=tk.LEFT)
-label_result.pack(fill=tk.X)
-
-# SEPARATOR
-tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
-
-# ZOOM CONTROLS
-zoom_section = tk.Frame(controls_inner, bg=bg_panel)
-zoom_section.pack(fill=tk.X, pady=(0, 15))
-
-tk.Label(zoom_section, text="🔍 Zoom:", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 8))
-
-zoom_buttons = tk.Frame(zoom_section, bg=bg_panel)
-zoom_buttons.pack(fill=tk.X)
-
-tk.Button(zoom_buttons, text="Zoom +", command=zoom_in, bg="#333333", fg=fg_main,
-          relief=tk.FLAT, cursor="hand2", font=("Segoe UI", 9),
-          activebackground="#444444").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3), ipady=5)
-tk.Button(zoom_buttons, text="Zoom -", command=zoom_out, bg="#333333", fg=fg_main,
-          relief=tk.FLAT, cursor="hand2", font=("Segoe UI", 9),
-          activebackground="#444444").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 3), ipady=5)
-tk.Button(zoom_buttons, text="Reset", command=reset_zoom, bg="#333333", fg=fg_main,
-          relief=tk.FLAT, cursor="hand2", font=("Segoe UI", 9),
-          activebackground="#444444").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0), ipady=5)
-
-# SEPARATOR
-tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
-
-# MANUAL OFFSET
-manual_section = tk.Frame(controls_inner, bg=bg_panel)
-manual_section.pack(fill=tk.X, pady=(0, 15))
-
-tk.Label(manual_section, text="✏️ Manual offset:", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 8))
-
-manual_controls = tk.Frame(manual_section, bg=bg_panel)
-manual_controls.pack(fill=tk.X)
-
-entry_manual_offset = tk.Entry(manual_controls, bg=bg_input, fg=fg_main, insertbackground="white",
-                               relief=tk.FLAT, font=("Segoe UI", 10), justify=tk.CENTER)
-entry_manual_offset.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 5))
-
-tk.Button(manual_controls, text="Apply", command=apply_manual_offset, bg=btn_primary, fg=fg_main,
-          relief=tk.FLAT, cursor="hand2", font=("Segoe UI", 9, "bold"),
-          activebackground=btn_hover, width=8).pack(side=tk.LEFT, ipady=6)
-
-tk.Label(manual_section, text="(in milliseconds)", bg=bg_panel, fg="#666666",
-         font=("Segoe UI", 7)).pack(anchor=tk.W, pady=(3, 0))
-
-# SEPARATOR
-tk.Frame(controls_inner, bg="#444444", height=1).pack(fill=tk.X, pady=15)
-
-# TIMELINE TAB
-_timeline_panel = None
-
-
-def timeline_files():
-    """Return (reference, target) from the Quick tab, or (None, None)."""
-    file1 = entry_file1.get().strip()
-    file2 = entry_file2.get().strip()
-    if not file1 or not file2:
-        return None, None
-    if ref_var.get() == 1:
-        return file1, file2
-    return file2, file1
-
-
-def load_timeline(force: bool = False) -> None:
-    """(Re)build the Timeline panel for the files chosen in the Quick tab."""
-    global _timeline_panel
-    ref, target = timeline_files()
-    if not ref:
-        messagebox.showerror("Timeline", "Select both files first (Quick tab).")
-        return
-    if _timeline_panel is not None and not force:
-        return
-    if _timeline_panel is not None:
-        try:
-            _timeline_panel.close()
-            _timeline_panel.frame.destroy()
-        except Exception:
-            pass
-        _timeline_panel = None
-    _timeline_panel = TimelinePanel(tl_body, ref, target)
-
-    ref_fps = _timeline_panel.var_fps_ref.get()
-    tgt_fps = _timeline_panel.var_fps_tgt.get()
-    ref_tag = f"  [{ref_fps} fps]" if ref_fps else ""
-    tgt_tag = f"  [{tgt_fps} fps]" if tgt_fps else ""
-    speed_note = ""
-    try:
-        ratio = float(ref_fps) / float(tgt_fps)
-        if abs(ratio - 1.0) > 1e-5:
-            speed_note = f"        atempo {ratio:.6f}"
-    except (ValueError, ZeroDivisionError):
-        pass
-    tl_info.config(text=f"Reference: {os.path.basename(ref)}{ref_tag}"
-                        f"    →    Target: {os.path.basename(target)}{tgt_tag}"
-                        f"{speed_note}")
-    console_log(f"Timeline loaded: reference={os.path.basename(ref)}  "
-                f"target={os.path.basename(target)}", "info")
-
-
-def open_timeline() -> None:
-    """Switch to the Timeline tab and load the current files if needed."""
-    notebook.select(timeline_tab)
-    load_timeline()
-
-
-tk.Button(controls_inner, text="Timeline sync  →",
-          command=open_timeline,
-          bg="#3a2a5a", fg="#ffffff", relief=tk.FLAT, cursor="hand2",
-          font=("Segoe UI", 9, "bold"),
-          activebackground="#4a3a7a").pack(fill=tk.X, ipady=8, pady=(0, 10))
-
-# TIPS BUTTON
-def show_tips():
-    """Show a popup with usage tips."""
-    popup = tk.Toplevel(root)
-    popup.title("Help")
-    popup.configure(bg="#1a1a1a")
-    popup.resizable(False, False)
-    popup.update()
-    _apply_dark_titlebar(popup)
-
-    tk.Label(popup, text="❓ Help",
-             bg="#1a1a1a", fg="#4a9eff",
-             font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 8))
-
-    tips_content = (
-        "QUICK SYNC – one offset at a time\n"
-        "  1. Pick File 1 / File 2 and mark the one you KEEP as Base\n"
-        "  2. Start time + Duration (30–60 s of dialogue or music)\n"
-        "  3. ANALYZE → offset is measured and drawn on the chart\n"
-        "  4. Manual offset only nudges the chart for a visual check\n"
-        "\n"
-        "TIMELINE – the whole track\n"
-        "  • Auto-scan measures the offset every Step seconds\n"
-        "  • Framerate is detected automatically and the drift hint\n"
-        "    is filled in for you (e.g. 23.976 vs 25 = PAL)\n"
-        "  • Click the chart to measure that exact moment\n"
-        "  • Add manual point: a time plus a known offset\n"
-        "  • The model lists one row per segment: offset, drift, atempo\n"
-        "  • Export writes Matroska Audio (.mka), then measures it and\n"
-        "    re-exports aligned if more than 3 ms is left\n"
-        "\n"
-        "READING THE NUMBERS\n"
-        "  offset   + target late      − target early\n"
-        "  drift    ms/s; positive = target gets later (plays slower)\n"
-        "  atempo   1 + drift/1000, locked to the exact fps ratio\n"
-        "  jump     edit in the target: + extra content (skipped),\n"
-        "           − missing content (silence inserted)\n"
-        "\n"
-        "TYPICAL WORKFLOW\n"
-        "  1. Quick tab: select both files, Base on the one you keep\n"
-        "  2. Timeline tab → Auto-scan whole file\n"
-        "  3. Check the points and the model, delete the bad ones\n"
-        "  4. Export → mux the .mka into the video, no delay needed\n"
-        "\n"
-        "GOOD MEASUREMENTS\n"
-        "  • 40–60 s windows with 30 s steps are a good default\n"
-        "  • Music and effects give the strongest matches\n"
-        "  • Orange points are below Min confidence and are ignored\n"
-        "  • verify & auto-align doubles export time – uncheck it\n"
-        "    if you want a single quick pass"
-    )
-    txt = tk.Label(popup, text=tips_content,
-                   bg="#1a1a1a", fg="#aaaaaa",
-                   font=("Segoe UI", 9), justify=tk.LEFT, anchor=tk.W)
-    txt.pack(padx=20, pady=(0, 8), anchor=tk.W)
-
-    tk.Button(popup, text="Close", command=popup.destroy,
-              bg="#333333", fg="#ffffff", relief=tk.FLAT,
-              font=("Segoe UI", 9), cursor="hand2",
-              activebackground="#444444",
-              padx=20, pady=6).pack(pady=(4, 16))
-
-    # Centre popup on main window
-    popup.update_idletasks()
-    x = root.winfo_x() + (root.winfo_width()  - popup.winfo_width())  // 2
-    y = root.winfo_y() + (root.winfo_height() - popup.winfo_height()) // 2
-    popup.geometry(f"+{x}+{y}")
-    popup.grab_set()
-
-tk.Button(controls_inner, text="❓ Help", command=show_tips,
-          bg="#333333", fg=fg_dim, relief=tk.FLAT, cursor="hand2",
-          font=("Segoe UI", 9), activebackground="#444444").pack(fill=tk.X, ipady=6)
-
-# ── RIGHT: Console / log panel ──────────────────────────────────────────────
 console_panel = tk.LabelFrame(console_host, text=" Console ", bg=bg_panel, fg=fg_accent,
                               font=("Segoe UI", 9, "bold"), relief=tk.GROOVE, bd=2)
 console_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=(2, 4))
@@ -4367,11 +4090,57 @@ tk.Button(console_inner, text="Clear", command=console_clear,
 # ---------------------------------------------------------------------------
 # TIMELINE TAB CONTENT
 # ---------------------------------------------------------------------------
-tl_header = tk.Frame(timeline_tab, bg=bg_main)
+def timeline_files():
+    """Return (reference, target) from the file bar, or (None, None)."""
+    file1 = entry_file1.get().strip()
+    file2 = entry_file2.get().strip()
+    if not file1 or not file2:
+        return None, None
+    if ref_var.get() == 1:
+        return file1, file2
+    return file2, file1
+
+
+def load_timeline(force: bool = False) -> None:
+    """(Re)build the Timeline panel for the files chosen above."""
+    global _timeline_panel
+    ref, target = timeline_files()
+    if not ref:
+        messagebox.showerror("Timeline", "Select both files first.")
+        return
+    if _timeline_panel is not None and not force:
+        return
+    if _timeline_panel is not None:
+        try:
+            _timeline_panel.close()
+            _timeline_panel.frame.destroy()
+        except Exception:
+            pass
+        _timeline_panel = None
+    _timeline_panel = TimelinePanel(tl_body, ref, target)
+    ref_fps = _timeline_panel.var_fps_ref.get()
+    tgt_fps = _timeline_panel.var_fps_tgt.get()
+    ref_tag = f"  [{ref_fps} fps]" if ref_fps else ""
+    tgt_tag = f"  [{tgt_fps} fps]" if tgt_fps else ""
+    speed_note = ""
+    try:
+        ratio = float(ref_fps) / float(tgt_fps)
+        if abs(ratio - 1.0) > 1e-5:
+            speed_note = f"        atempo {ratio:.6f}"
+    except (ValueError, ZeroDivisionError):
+        pass
+    tl_info.config(text=f"Reference: {os.path.basename(ref)}{ref_tag}"
+                        f"    \u2192    Target: {os.path.basename(target)}{tgt_tag}"
+                        f"{speed_note}")
+    console_log(f"Timeline loaded: {os.path.basename(ref)} \u2192 "
+                f"{os.path.basename(target)}", "info")
+
+
+tl_header = tk.Frame(main_area, bg=bg_main)
 tl_header.pack(fill=tk.X, padx=16, pady=(12, 6))
 
 tl_info = tk.Label(tl_header,
-                   text="Choose two files in the Quick tab, then press Load.",
+                   text="Choose both files above — the timeline loads automatically.",
                    bg=bg_main, fg="#888888", font=("Segoe UI", 8),
                    anchor=tk.W, justify=tk.LEFT)
 tl_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -4381,22 +4150,10 @@ tk.Button(tl_header, text="Load files", command=lambda: load_timeline(force=True
           font=("Segoe UI", 8, "bold"), activebackground=btn_hover,
           padx=14, pady=3).pack(side=tk.RIGHT)
 
-tl_body = tk.Frame(timeline_tab, bg=bg_main)
+tl_body = tk.Frame(main_area, bg=bg_main)
 tl_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
 
-def _on_tab_changed(_event=None) -> None:
-    """Load the panel the first time the Timeline tab is opened."""
-    try:
-        if notebook.index("current") == 1 and _timeline_panel is None:
-            ref, _target = timeline_files()
-            if ref:
-                load_timeline()
-    except Exception:
-        pass
-
-
-notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -4416,10 +4173,6 @@ def _apply_responsive_layout() -> None:
         return
     try:
         console_host.config(height=max(92, min(200, int(height * 0.15))))
-    except tk.TclError:
-        pass
-    try:
-        control_panel.config(width=max(270, min(380, int(width * 0.17))))
     except tk.TclError:
         pass
     if _timeline_panel is not None:

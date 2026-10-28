@@ -271,6 +271,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 1.0.3
+
+- Framerate shown next to each file name in the Timeline header, so it is
+  obvious which side is PAL and which is original (`[23.976 fps]` vs `[25 fps]`),
+  with the resulting `atempo` at the end of the line.
+
 ### 1.0.2
 
 - Help window rewritten for the current workflow (Quick sync, Timeline,

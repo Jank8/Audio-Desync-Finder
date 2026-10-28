@@ -36,7 +36,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 # ---------------------------------------------------------------------------
 # HIDE CONSOLE WINDOW
@@ -4221,18 +4221,18 @@ def load_timeline(force: bool = False) -> None:
 
     ref_fps = _timeline_panel.var_fps_ref.get()
     tgt_fps = _timeline_panel.var_fps_tgt.get()
-    fps_note = ""
-    if ref_fps and tgt_fps:
-        fps_note = f"     [{ref_fps} fps  →  {tgt_fps} fps"
-        try:
-            ratio = float(ref_fps) / float(tgt_fps)
-            if abs(ratio - 1.0) > 1e-5:
-                fps_note += f", speed {ratio:.6f}"
-        except (ValueError, ZeroDivisionError):
-            pass
-        fps_note += "]"
-    tl_info.config(text=f"Reference: {os.path.basename(ref)}   →   "
-                        f"Target: {os.path.basename(target)}{fps_note}")
+    ref_tag = f"  [{ref_fps} fps]" if ref_fps else ""
+    tgt_tag = f"  [{tgt_fps} fps]" if tgt_fps else ""
+    speed_note = ""
+    try:
+        ratio = float(ref_fps) / float(tgt_fps)
+        if abs(ratio - 1.0) > 1e-5:
+            speed_note = f"        atempo {ratio:.6f}"
+    except (ValueError, ZeroDivisionError):
+        pass
+    tl_info.config(text=f"Reference: {os.path.basename(ref)}{ref_tag}"
+                        f"    →    Target: {os.path.basename(target)}{tgt_tag}"
+                        f"{speed_note}")
     console_log(f"Timeline loaded: reference={os.path.basename(ref)}  "
                 f"target={os.path.basename(target)}", "info")
 

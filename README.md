@@ -271,6 +271,14 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 1.0.1
+
+- **Self-aligning export** – the produced file is measured and, if more than
+  3 ms is left, the plan is shifted and the export repeated. No delay ever has
+  to be typed into the muxer.
+- **Automatic framerate detection** – both files are probed on load and the
+  drift hint fills itself, so PAL pairs (25 vs 23.976) work with one click.
+
 ### 1.0 – first stable release
 
 - **Automatic dependency installation** – missing Python packages are installed

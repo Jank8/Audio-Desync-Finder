@@ -36,7 +36,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.1"
 
 # ---------------------------------------------------------------------------
 # HIDE CONSOLE WINDOW
@@ -2829,6 +2829,35 @@ def mka_path(path: str) -> str:
     return (root if ext else path) + ".mka"
 
 
+def probe_framerate(path: str) -> float:
+    """
+    First video stream framerate, or 0.0 when it cannot be read.
+
+    ffprobe reports it as a rational ("24000/1001"), so it is converted to a
+    float; this is what fills the framerate hint automatically.
+    """
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
+        for line in (proc.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if "/" in line:
+                num, den = line.split("/", 1)
+                if float(den) > 0:
+                    return round(float(num) / float(den), 6)
+            else:
+                return round(float(line), 6)
+    except Exception:
+        pass
+    return 0.0
+
+
 def _probe_audio_stream(path: str) -> dict:
     """
     Read codec / bitrate / channels / sample rate of the first audio stream.
@@ -3127,6 +3156,15 @@ class TimelinePanel:
         self.status_var = tk.StringVar(value="Ready. Run an auto-scan, or click on the chart.")
 
         self.progress_var = tk.DoubleVar(value=0)
+        # detect the framerates so the drift hint is never forgotten
+        ref_fps = probe_framerate(self.ref_path)
+        tgt_fps = probe_framerate(self.target_path)
+        if ref_fps > 0:
+            self.var_fps_ref.set(f"{ref_fps:g}")
+        if tgt_fps > 0:
+            self.var_fps_tgt.set(f"{tgt_fps:g}")
+
+
         # ---- body --------------------------------------------------------
         body = tk.Frame(win, bg=BG_DARK)
         body.pack(fill=tk.BOTH, expand=True, padx=14)
@@ -3244,7 +3282,7 @@ class TimelinePanel:
         self.btn_export.pack(side=tk.LEFT)
 
         self.verify_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(footer, text="verify after export", variable=self.verify_var,
+        tk.Checkbutton(footer, text="verify & auto-align", variable=self.verify_var,
                        bg=BG_DARK, fg=FG_DIM, selectcolor=BG_INPUT, bd=0,
                        highlightthickness=0, activebackground=BG_DARK,
                        activeforeground="#ffffff",
@@ -3558,20 +3596,24 @@ class TimelinePanel:
         self._post("idle", None)
 
     def _task_export(self, out_path: str) -> None:
-        plan = self.plan
-
         def report(pct, text):
             self._post("progress", (pct, text))
 
+        plan = self.plan
         export_plan(plan, self.target_path, out_path, progress=report,
                     log=console_log, should_stop=self.stop_event.is_set)
 
-        # ---- measure what is left, report it, do not re-export -------------
-        # A second export would double the wait for a few milliseconds.  The
-        # residual is reported instead, together with the delay to type into
-        # the muxer if it is worth correcting (a frame is ~42 ms).
+        if not self.verify_var.get():
+            self._post("export_done", out_path)
+            return
         if self.stop_event.is_set():
             raise RuntimeError("Cancelled")
+
+        # ---- measure the produced file and align it automatically ----------
+        # The model is a fit, so a few milliseconds can be left over.  Instead
+        # of telling the user to type a delay into the muxer, shift the plan by
+        # exactly that amount and export once more.  No mux-time correction is
+        # ever needed.
         self.last_residual = None
         self._post("status", "Checking the alignment of the exported file…")
         try:
@@ -3580,11 +3622,26 @@ class TimelinePanel:
             console_log(f"Verification skipped: {exc}", "warn")
             residual = None
 
+        if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
+            delta = residual[0]          # positive = produced audio is late
+            console_log(f"Residual {delta:+.1f} ms – re-exporting aligned…", "warn")
+            self._post("status", f"Aligning: shifting by {delta:+.1f} ms and re-exporting…")
+            adjusted = shift_plan(plan, delta)
+            export_plan(adjusted, self.target_path, out_path, progress=report,
+                        log=console_log, should_stop=self.stop_event.is_set)
+            self.plan = adjusted
+            self._post("plan", adjusted)
+            try:
+                residual = measure_residual(self.ref_path, out_path)
+            except Exception:
+                pass
+
+        self.last_residual = residual
         if residual:
-            self.last_residual = residual
             for line in format_residual(residual).splitlines():
                 console_log(line, "ok" if abs(residual[0]) < 15 else "warn")
         self._post("export_done", out_path)
+
 
     # ------------------------------------------------------------ actions --
     def auto_scan(self) -> None:

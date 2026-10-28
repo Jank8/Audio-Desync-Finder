@@ -272,6 +272,12 @@ Audio Desync Finder/
 
 ## 📜 Changelog
 
+### 3.0.6
+
+- **Live theme switch**: the window listens for `WM_SETTINGCHANGE` and, when
+  Windows switches between light and dark, re-applies the Fluent theme, the
+  accent colour and the chart palette without a restart.
+
 ### 3.0.5
 
 - **Light theme fixed**: the palette follows the Windows theme (chart background,

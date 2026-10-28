@@ -1158,7 +1158,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.5"
+APP_VERSION = "3.0.6"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1557,6 +1557,50 @@ class MainWindow(FluentWindow):
                                else "winget finished - restart the app if FFmpeg is still missing"))
         except Exception as exc:
             self.ui_queue.put(("log", f"winget failed: {exc}"))
+
+    def apply_palette(self) -> None:
+        """Recompute the chart/text colours for the current theme."""
+        self.chart_bg = "#ffffff" if LIGHT else "#202020"
+        self.chart_fg = "#39404a" if LIGHT else "#c9cdd2"
+        self.chart_grid = "#00000022" if LIGHT else "#ffffff22"
+        self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
+        self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
+        self.accent = system_accent_hex()
+        try:
+            self.fig.patch.set_facecolor(self.chart_bg)
+            self.ax.set_facecolor(self.chart_bg)
+            self.model_view.setStyleSheet(
+                f"TextEdit{{background:transparent;border:none;"
+                f"color:{self.chart_fg};font:9pt 'Consolas';}}")
+            self.log_view.setStyleSheet(
+                f"TextEdit{{background:transparent;border:none;"
+                f"color:{self.log_fg};font:9pt 'Consolas';}}")
+        except Exception:
+            pass
+
+    def _reload_theme(self) -> None:
+        """Windows told us the theme changed while the app was running."""
+        global LIGHT
+        new_light = system_is_light()
+        if new_light == LIGHT:
+            return
+        LIGHT = new_light
+        setTheme(Theme.LIGHT if LIGHT else Theme.DARK)
+        setThemeColor(QColor(system_accent_hex()))
+        self.apply_palette()
+        self._draw()
+        self.log("Theme switched to " + ("light" if LIGHT else "dark"))
+
+    def nativeEvent(self, eventType, message):
+        """Catch WM_SETTINGCHANGE so the theme follows Windows live."""
+        try:
+            import ctypes.wintypes
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == 0x001A:          # WM_SETTINGCHANGE
+                QTimer.singleShot(350, self._reload_theme)
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
 
     def _fill_table(self):
         self.table.setRowCount(len(self.points))

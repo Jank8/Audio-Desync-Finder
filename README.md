@@ -263,15 +263,19 @@ The refined lag is converted to milliseconds.  If pre-offsets were set, their di
 
 ```
 Audio Desync Finder/
-├── AudioDesyncFinder.pyw   # 3.0 UI (PySide6 + Fluent, Mica)
-├── sync_engine.py          # shared analysis engine
-├── legacy/                 # the 2.x Tk single-file version
+├── AudioDesyncFinder.pyw   # 3.0 - single file (UI + engine)
+├── legacy/                 # the 2.x Tk version
 └── README.md
 ```
 
 ---
 
 ## 📜 Changelog
+
+### 3.0.4
+
+- **Back to a single file.** The engine is inlined again into
+  `AudioDesyncFinder.pyw`; `sync_engine.py` is gone. One `.pyw` is all you copy.
 
 ### 3.0.3
 

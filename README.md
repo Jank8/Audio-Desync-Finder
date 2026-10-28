@@ -26,8 +26,24 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 3. **Auto-scan whole file**, check the model, then **Export corrected audio**.
 4. Mux the `.mka` with mkvmerge - no `--sync`, no delay.
 
-Framerates are detected automatically; different fps are handled for you
-(`atempo` is shown under the file names before the scan).
+## Controls
+
+| Control | What it does |
+|---|---|
+| **File 1 / File 2** | the two media files; choosing one loads it immediately |
+| **Base** | which file's timeline is the reference (the one you keep). The other becomes the target and is corrected. Framerates and the drift hint follow this choice |
+| **Window (s)** | length of one analysis window. 40 s is a good default: longer is steadier on music-heavy material, shorter follows rapid edits |
+| **Step (s)** | how often a window is measured. 30 s samples the offset twice a minute; smaller values give a denser curve but a slower scan |
+| **Min confidence** | how sharp the correlation peak must be for a measurement to count. 2 is permissive, 5+ strict. Raise it when the chart looks scattered - weak points are dropped from the model, not from the chart |
+| **Signal** | `Auto` tries the waveform first and falls back to the envelope; `Waveform` for same-language sources and music; `Envelope` for two different dubs |
+| **Auto-scan whole file** | runs the scan; progress goes to the bar, messages to the log |
+| **Stop** | stops a running scan or export |
+| **Chart** | offset over time: dots are measurements, the green line is the fitted model |
+| **Table** | every measurement with time, offset, confidence and source (`wave` / `env`) |
+| **Delete selected point** | drops a bad measurement and re-fits the model at once |
+| **Fitted model** | one line per segment: time range, offset at its start, drift in ms/s and the resulting `atempo` |
+| **Export corrected audio** | writes the `.mka`, then measures it again and prints the residual offset in the log |
+| **Line under the files** | detected framerates and the `atempo` they imply |
 
 ## Files
 

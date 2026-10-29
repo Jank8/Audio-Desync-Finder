@@ -784,6 +784,33 @@ def shift_track_by_ms(track, delta_ms: float):
     return track
 
 
+def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
+    """
+    Drift the durations imply, with the framerates as a second opinion.
+
+    Running times are the reliable signal: a 50 fps TV rip carries normal-speed
+    audio, so the fps ratio alone would suggest a nonsense -520 ms/s.  The
+    duration ratio gives the real speed change; the framerates only confirm it,
+    and when they disagree the durations win.
+    """
+    if fps_ref is None or fps_tgt is None:
+        fps_ref, fps_tgt = probe_framerate(ref_path), probe_framerate(tgt_path)
+    dur_ref = _get_file_duration(ref_path)
+    dur_tgt = _get_file_duration(tgt_path)
+    if dur_ref > 60 and dur_tgt > 60:
+        length_ratio = dur_ref / dur_tgt
+        if abs(length_ratio - 1.0) < 0.005:
+            return None
+        implied = (length_ratio - 1.0) * 1000.0
+        if fps_ref and fps_tgt and abs(fps_ref - fps_tgt) > 1e-9:
+            if abs(length_ratio - fps_ref / fps_tgt) < 0.02:
+                return framerate_slope(fps_ref, fps_tgt)
+        return implied
+    if fps_ref and fps_tgt and abs(fps_ref - fps_tgt) > 1e-9:
+        return framerate_slope(fps_ref, fps_tgt)
+    return None
+
+
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
                merge_ms: float = 60.0, slope_hint: float = None):
@@ -1226,7 +1253,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.22"
+APP_VERSION = "3.0.23"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1625,10 +1652,9 @@ class MainWindow(FluentWindow):
 
     def _fps_hint(self):
         ref, tgt = self._ordered_paths()
-        r, t = probe_framerate(ref), probe_framerate(tgt)
-        if r > 0 and t > 0 and abs(r - t) > 1e-9:
-            return framerate_slope(r, t)
-        return None
+        if not (ref and tgt):
+            return None
+        return speed_hint(ref, tgt)
 
     # --------------------------------------------------------------- tasks
     def log(self, text):

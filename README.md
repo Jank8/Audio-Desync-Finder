@@ -3,6 +3,10 @@
 Finds and fixes the audio offset between two releases - different framerates,
 different dubs, different edits - and exports a corrected Matroska Audio track.
 
+<img width="1860" height="1290" alt="obraz" src="https://github.com/user-attachments/assets/1f6b1696-263f-4e03-a2e3-3904a197fff8" />
+
+<img width="1860" height="1290" alt="obraz" src="https://github.com/user-attachments/assets/d7c59edd-0c0f-40d1-a51c-cd7de95b3a10" />
+
 ## What it does
 
 - scans the whole runtime and fits a piecewise-linear offset model,

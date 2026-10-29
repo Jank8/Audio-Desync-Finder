@@ -58,6 +58,6 @@ Every release carries both files: the current app and the Tk fallback.
 
 ## License
 
-GNU GPL v3 or later - [LICENSE](LICENSE),
+Copyright (C) 2026 Janusz Woźniak - GNU GPL v3 or later - [LICENSE](LICENSE),
 [full text](https://www.gnu.org/licenses/gpl-3.0.txt). Modified versions must
 stay under the same license and ship their source.

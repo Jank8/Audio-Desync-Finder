@@ -4,7 +4,7 @@ A single file: the user interface and the analysis engine live together.
 Run: pythonw AudioDesyncFinder.pyw
 """
 
-# Audio Desync Finder - Copyright (C) 2026 Janusz Wozniak
+# Audio Desync Finder - Copyright (C) 2026 Janusz Woźniak
 # Licensed under the GNU General Public License v3 or later.
 # See LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt - no warranty.
 
@@ -1197,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.16"
+APP_VERSION = "3.0.17"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

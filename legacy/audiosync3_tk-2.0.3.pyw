@@ -19,7 +19,7 @@ Dependencies:
     enough to start the program.
 """
 
-# Audio Desync Finder - Copyright (C) 2026 Janusz Wozniak
+# Audio Desync Finder - Copyright (C) 2026 Janusz Woźniak
 # Licensed under the GNU General Public License v3 or later.
 # See LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt - no warranty.
 

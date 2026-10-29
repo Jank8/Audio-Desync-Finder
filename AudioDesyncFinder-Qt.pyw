@@ -755,6 +755,35 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
     return float(slope), float(intercept), pts, rms
 
 
+def coarse_offset(a, b) -> float:
+    """
+    Rough whole-track offset in milliseconds.
+
+    A single window can only resolve offsets up to its own length, so a target
+    that starts minutes late would never be found by the scan.  Correlating the
+    full-length energy envelopes finds any offset, accurate to a few ms.
+    """
+    env_a, env_b = _envelope_of(a, SCAN_SR), _envelope_of(b, SCAN_SR)
+    if len(env_a) < 10 or len(env_b) < 10:
+        return 0.0
+    corr = signal.correlate(env_a, env_b, mode="full", method="fft")
+    lags = signal.correlation_lags(len(env_a), len(env_b), mode="full")
+    lag = float(lags[int(np.argmax(np.abs(corr)))])
+    return float(-lag * ENVELOPE_HOP_S * 1000.0)
+
+
+def shift_track_by_ms(track, delta_ms: float):
+    """Advance the track by delta_ms; positive values cut from the start."""
+    n = int(round(float(delta_ms) / 1000.0 * SCAN_SR))
+    if n > 0:
+        if n >= len(track) - SCAN_SR:
+            return track
+        return track[n:]
+    if n < 0:
+        return np.concatenate([np.zeros(-n, dtype=track.dtype), track])
+    return track
+
+
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
                merge_ms: float = 60.0, slope_hint: float = None):
@@ -1197,7 +1226,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.21"
+APP_VERSION = "3.0.22"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1637,6 +1666,17 @@ class MainWindow(FluentWindow):
             hint = self._fps_hint()
             rate = 1.0 + hint / 1000.0 if hint and abs(hint) >= 0.3 else 1.0
             scan_tgt = resample_track(tgt, rate) if rate != 1.0 else tgt
+            coarse = 0.0
+            try:
+                coarse = coarse_offset(ref, scan_tgt)
+            except Exception:
+                coarse = 0.0
+            if abs(coarse) > 30000:
+                self.ui_queue.put(("log", f"Coarse alignment {coarse:+.0f} ms - "
+                                          f"shifting the target before the scan"))
+                scan_tgt = shift_track_by_ms(scan_tgt, coarse)
+            else:
+                coarse = 0.0
             points = scan_arrays(
                 ref, scan_tgt, window=self._num(self.entry_window, 40),
                 step=self._num(self.entry_step, 30),
@@ -1648,6 +1688,9 @@ class MainWindow(FluentWindow):
                                   f"Measuring {done}/{total}"))),
                 should_stop=self.stop_event.is_set)
             points = sorted(compensate_points(points, rate), key=lambda p: p["t"])
+            if coarse:
+                for point in points:
+                    point["offset"] = round(point["offset"] + coarse, 2)
             plan = build_plan(points, meta["ref_duration"],
                                      min_conf=self._num(self.entry_conf, 2),
                                      slope_hint=hint)

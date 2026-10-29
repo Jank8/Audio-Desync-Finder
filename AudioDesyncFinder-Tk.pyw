@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.21"
+APP_VERSION = "2.0.22"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2669,6 +2669,35 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
     return float(slope), float(intercept), pts, rms
 
 
+def coarse_offset(a, b) -> float:
+    """
+    Rough whole-track offset in milliseconds.
+
+    A single window can only resolve offsets up to its own length, so a target
+    that starts minutes late would never be found by the scan.  Correlating the
+    full-length energy envelopes finds any offset, accurate to a few ms.
+    """
+    env_a, env_b = _envelope_of(a, SCAN_SR), _envelope_of(b, SCAN_SR)
+    if len(env_a) < 10 or len(env_b) < 10:
+        return 0.0
+    corr = signal.correlate(env_a, env_b, mode="full", method="fft")
+    lags = signal.correlation_lags(len(env_a), len(env_b), mode="full")
+    lag = float(lags[int(np.argmax(np.abs(corr)))])
+    return float(-lag * ENVELOPE_HOP_S * 1000.0)
+
+
+def shift_track_by_ms(track, delta_ms: float):
+    """Advance the track by delta_ms; positive values cut from the start."""
+    n = int(round(float(delta_ms) / 1000.0 * SCAN_SR))
+    if n > 0:
+        if n >= len(track) - SCAN_SR:
+            return track
+        return track[n:]
+    if n < 0:
+        return np.concatenate([np.zeros(-n, dtype=track.dtype), track])
+    return track
+
+
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
                merge_ms: float = 60.0, slope_hint: float = None):
@@ -3578,6 +3607,19 @@ class TimelinePanel:
         else:
             self._post("status", f"Measuring every {step:.0f}s ({mode})…")
 
+        coarse = 0.0
+        try:
+            coarse = coarse_offset(ref, tgt)
+        except Exception:
+            coarse = 0.0
+        if abs(coarse) > 30000:
+            self._post("status", f"Coarse alignment {coarse:+.0f} ms – "
+                                 f"shifting the target before the scan…")
+            tgt = shift_track_by_ms(tgt, coarse)
+            scan_tgt = shift_track_by_ms(scan_tgt, coarse)
+        else:
+            coarse = 0.0
+
         points, plan = self._run_scan(ref, scan_tgt, scan_rate, meta,
                                       window, step, mode, hint)
 
@@ -3608,6 +3650,11 @@ class TimelinePanel:
                 self._post("status",
                            f"Drift compensation applied – residual "
                            f"{plan_slope(plan):+.3f} ms/s.")
+
+        if coarse:
+            points = [dict(p, offset=round(p["offset"] + coarse, 2)) for p in points]
+            plan = build_plan(points, self.plan_duration,
+                              min_conf=self._conf(), slope_hint=hint)
 
         self.tgt_data, self.scan_rate = scan_tgt, scan_rate
         tgt = scan_tgt
@@ -4194,14 +4241,6 @@ entry_file1.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4, padx=(5, 5))
 tk.Button(file1_container, text="Browse", command=select_file1, bg=btn_primary, fg=fg_main,
           relief=tk.FLAT, font=("Segoe UI", 9), cursor="hand2", width=8,
           activebackground=btn_hover).pack(side=tk.LEFT, padx=(0, 5))
-tk.Label(file1_container, text="Pre-offset:", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(5, 2))
-entry_preoffset1 = tk.Entry(file1_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                             relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
-entry_preoffset1.insert(0, "0")
-entry_preoffset1.pack(side=tk.LEFT, ipady=3, padx=(0, 5))
-tk.Label(file1_container, text="s", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 5))
 tk.Radiobutton(file1_container, text="Base", variable=ref_var, value=1, bg=bg_panel,
                fg=fg_dim, selectcolor=bg_panel, activebackground=bg_panel,
                font=("Segoe UI", 9)).pack(side=tk.LEFT)
@@ -4218,14 +4257,6 @@ entry_file2.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4, padx=(5, 5))
 tk.Button(file2_container, text="Browse", command=select_file2, bg=btn_primary, fg=fg_main,
           relief=tk.FLAT, font=("Segoe UI", 9), cursor="hand2", width=8,
           activebackground=btn_hover).pack(side=tk.LEFT, padx=(0, 5))
-tk.Label(file2_container, text="Pre-offset:", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(5, 2))
-entry_preoffset2 = tk.Entry(file2_container, bg=bg_input, fg=fg_main, insertbackground="white",
-                             relief=tk.FLAT, font=("Segoe UI", 9), width=6, justify=tk.CENTER)
-entry_preoffset2.insert(0, "0")
-entry_preoffset2.pack(side=tk.LEFT, ipady=3, padx=(0, 5))
-tk.Label(file2_container, text="s", bg=bg_panel, fg=fg_dim,
-         font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 5))
 tk.Radiobutton(file2_container, text="Base", variable=ref_var, value=2, bg=bg_panel,
                fg=fg_dim, selectcolor=bg_panel, activebackground=bg_panel,
                font=("Segoe UI", 9)).pack(side=tk.LEFT)

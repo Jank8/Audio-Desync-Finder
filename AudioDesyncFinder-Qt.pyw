@@ -1197,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.19"
+APP_VERSION = "3.0.20"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1229,8 +1229,8 @@ def build_icon(size: int = 256) -> QIcon:
     """
     Neon waveform icon drawn entirely in code - no image files.
 
-    Navy rounded square, a blue wave above a purple one, two dashed guides and
-    a double arrow showing the correction.
+    Deep navy square, faint grid, two smooth glowing waves (blue above, magenta
+    below), two dashed guides and a correction arrow.
     """
     import math
 
@@ -1246,66 +1246,87 @@ def build_icon(size: int = 256) -> QIcon:
         p.setRenderHint(QPainter.Antialiasing, True)
         u = px / 256.0
 
-        grad = QLinearGradient(0, 0, px, px)
-        grad.setColorAt(0.0, QColor("#070d24"))
-        grad.setColorAt(1.0, QColor("#1a1f5e"))
+        grad = QLinearGradient(0, 0, 0, px)
+        grad.setColorAt(0.0, QColor("#0a1330"))
+        grad.setColorAt(1.0, QColor("#141f4d"))
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(grad))
         p.drawRoundedRect(QRectF(1, 1, px - 2, px - 2), 56 * u, 56 * u)
 
-        n = 13
-        step = (px * 0.84) / (n - 1)
-        left = px * 0.5 - (px * 0.84) / 2
-        bar_w = max(1.5, px * 0.050)
-        for i in range(n):
-            f = math.exp(-((i - (n - 1) / 2) / (n * 0.26)) ** 2)
-            height = px * 0.30 * f + px * 0.018
-            x = left + i * step - bar_w / 2
-            t = i / (n - 1)
-            p.setBrush(_lerp_colour("#1a86ff", "#63e9ff", t))
-            p.drawRoundedRect(QRectF(x, px * 0.345 - height / 2, bar_w, height),
-                              bar_w / 2, bar_w / 2)
-            p.setBrush(_lerp_colour("#9d35ff", "#e463ff", t))
-            p.drawRoundedRect(QRectF(x, px * 0.635 - height * 0.45, bar_w,
-                                     height * 0.92), bar_w / 2, bar_w / 2)
-
-        # dashed guides
-        for x, colour in ((px * 0.448, "#dfe3ef"), (px * 0.588, "#b45cff")):
-            pen = QPen(QColor(colour))
-            pen.setWidthF(max(1.0, px * 0.012))
-            pen.setDashPattern([2.2, 2.2])
-            p.setPen(pen)
-            p.drawLine(QPointF(x, px * 0.13), QPointF(x, px * 0.87))
-
-        # double arrow
-        y = px * 0.795
-        x0, x1 = px * 0.455, px * 0.582
-        head = px * 0.042
-        p.setPen(Qt.NoPen)
-        left_arrow = QPainterPath()
-        left_arrow.moveTo(x0, y)
-        left_arrow.lineTo(x0 + head, y - head)
-        left_arrow.lineTo(x0 + head, y + head)
-        left_arrow.closeSubpath()
-        p.fillPath(left_arrow, QColor("#39d7ff"))
-        right_arrow = QPainterPath()
-        right_arrow.moveTo(x1, y)
-        right_arrow.lineTo(x1 - head, y - head)
-        right_arrow.lineTo(x1 - head, y + head)
-        right_arrow.closeSubpath()
-        p.fillPath(right_arrow, QColor("#d05cff"))
-        pen = QPen(QColor("#59c8ff"))
-        pen.setWidthF(max(1.0, px * 0.016))
+        pen = QPen(QColor(255, 255, 255, 20))
+        pen.setWidthF(max(0.6, px * 0.004))
         p.setPen(pen)
-        p.drawLine(QPointF(x0 + head * 0.8, y), QPointF(px * 0.52, y))
+        for i in range(1, 6):
+            p.drawLine(QPointF(px * i / 6.0, px * 0.10),
+                       QPointF(px * i / 6.0, px * 0.90))
+        for i in range(1, 5):
+            p.drawLine(QPointF(px * 0.05, px * i / 5.0),
+                       QPointF(px * 0.95, px * i / 5.0))
+
+        def draw_wave(centre_y, amplitude, colour):
+            path = QPainterPath()
+            first = True
+            steps = max(24, int(px * 0.90))
+            for k in range(steps + 1):
+                x = px * 0.05 + (px * 0.90) * k / steps
+                t = x / px
+                env = math.exp(-((t - 0.50) / 0.30) ** 2)
+                y = centre_y - amplitude * env * (
+                    math.sin(t * 17.0 + 0.4) + 0.35 * math.sin(t * 33.0 + 2.0))
+                if first:
+                    path.moveTo(x, y)
+                    first = False
+                else:
+                    path.lineTo(x, y)
+            p.setBrush(Qt.NoBrush)
+            for width, alpha in ((0.100, 26), (0.065, 56), (0.036, 130),
+                                 (0.020, 255)):
+                glow = QColor(colour)
+                glow.setAlpha(alpha)
+                pen = QPen(glow)
+                pen.setWidthF(max(0.8, px * width))
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                p.setPen(pen)
+                p.drawPath(path)
+
+        draw_wave(px * 0.345, px * 0.125, "#2fa8ff")
+        draw_wave(px * 0.630, px * 0.120, "#c14dff")
+
+        for x, colour in ((px * 0.455, "#e6e9f2"), (px * 0.578, "#b45cff")):
+            pen = QPen(QColor(colour))
+            pen.setWidthF(max(1.0, px * 0.013))
+            pen.setDashPattern([1.8, 1.8])
+            p.setPen(pen)
+            p.drawLine(QPointF(x, px * 0.12), QPointF(x, px * 0.80))
+
+        y = px * 0.805
+        x0, x1 = px * 0.455, px * 0.578
+        head = px * 0.040
+        p.setPen(Qt.NoPen)
+        left = QPainterPath()
+        left.moveTo(x0, y)
+        left.lineTo(x0 + head, y - head)
+        left.lineTo(x0 + head, y + head)
+        left.closeSubpath()
+        p.fillPath(left, QColor("#39d7ff"))
+        right = QPainterPath()
+        right.moveTo(x1, y)
+        right.lineTo(x1 - head, y - head)
+        right.lineTo(x1 - head, y + head)
+        right.closeSubpath()
+        p.fillPath(right, QColor("#d05cff"))
+        pen = QPen(QColor("#59c8ff"))
+        pen.setWidthF(max(1.0, px * 0.017))
+        p.setPen(pen)
+        p.drawLine(QPointF(x0 + head * 0.9, y), QPointF(px * 0.516, y))
         pen.setColor(QColor("#c46bff"))
         p.setPen(pen)
-        p.drawLine(QPointF(px * 0.52, y), QPointF(x1 - head * 0.8, y))
+        p.drawLine(QPointF(px * 0.516, y), QPointF(x1 - head * 0.9, y))
 
         p.end()
         icon.addPixmap(pm)
     return icon
-
 
 def system_accent_hex() -> str:
     """The active Windows accent colour (DWM stores it as 0xAABBGGRR)."""
@@ -1333,6 +1354,13 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(build_icon(256))
+        try:
+            self.titleBar.hBoxLayout.setSpacing(6)
+            self.titleBar.titleLabel.setContentsMargins(0, 0, 0, 0)
+            self.titleBar.titleLabel.setStyleSheet('padding: 0; margin: 0;')
+            self.titleBar.iconLabel.setContentsMargins(0, 0, 0, 0)
+        except Exception:
+            pass
         self.resize(1240, 860)
         self.setMicaEffectEnabled(True)
         self.setMinimumSize(1000, 640)

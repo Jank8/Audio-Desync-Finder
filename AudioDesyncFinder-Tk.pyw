@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.19"
+APP_VERSION = "2.0.20"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -3967,16 +3967,24 @@ def _icon_mix(a, b, t: float):
     return tuple(int(x + (y - x) * t) for x, y in zip(a, b))
 
 
+def _icon_blend(dst, src, alpha: float):
+    return (int(src[0] * alpha + dst[0] * (1 - alpha)),
+            int(src[1] * alpha + dst[1] * (1 - alpha)),
+            int(src[2] * alpha + dst[2] * (1 - alpha)))
+
+
 def build_icon_photo(size: int = 64):
     """
     Same neon waveform icon as the Qt build, rasterised by hand.
 
-    Tk has no vector painter, so the shapes are written into a pixel buffer and
-    handed to a PhotoImage row by row. No image files involved.
+    Tk has no vector painter and PhotoImage has no alpha channel, so the shapes
+    are blended into a pixel buffer and handed over row by row.
     """
     import math
 
-    bg0, bg1 = _icon_rgb("#070d24"), _icon_rgb("#1a1f5e")
+    bg0, bg1 = _icon_rgb("#0a1330"), _icon_rgb("#141f4d")
+    grid_colour = _icon_rgb("#ffffff")
+    blue, magenta = _icon_rgb("#2fa8ff"), _icon_rgb("#c14dff")
     buf = [[None] * size for _ in range(size)]
     radius = 0.22 * size
 
@@ -3986,50 +3994,62 @@ def build_icon_photo(size: int = 64):
             if dx < radius and dy < radius:
                 if (radius - dx) ** 2 + (radius - dy) ** 2 > radius * radius:
                     continue
-            buf[y][x] = _icon_mix(bg0, bg1, (x + y) / (2.0 * (size - 1)))
+            buf[y][x] = _icon_mix(bg0, bg1, y / float(size - 1))
 
-    def rect(x0, y0, x1, y1, colour):
-        for yy in range(int(round(y0)), int(round(y1)) + 1):
-            if not 0 <= yy < size:
-                continue
-            for xx in range(int(round(x0)), int(round(x1)) + 1):
-                if 0 <= xx < size:
-                    buf[yy][xx] = colour
+    def blend(x, y, colour, alpha):
+        xi, yi = int(x), int(y)
+        if 0 <= xi < size and 0 <= yi < size and buf[yi][xi] is not None:
+            buf[yi][xi] = (colour if alpha >= 0.999
+                           else _icon_blend(buf[yi][xi], colour, alpha))
 
-    count = 13
-    step = 0.84 * size / (count - 1)
-    left = size * 0.5 - 0.84 * size / 2
-    bar_w = max(1.0, size * 0.05)
-    top_cy, bottom_cy = size * 0.345, size * 0.635
-    for i in range(count):
-        factor = math.exp(-((i - (count - 1) / 2) / (count * 0.26)) ** 2)
-        height = size * 0.30 * factor + size * 0.02
-        t = i / (count - 1)
-        x0 = left + i * step - bar_w / 2
-        rect(x0, top_cy - height / 2, x0 + bar_w, top_cy + height / 2,
-             _icon_mix(_icon_rgb("#1a86ff"), _icon_rgb("#63e9ff"), t))
-        rect(x0, bottom_cy - height * 0.45, x0 + bar_w, bottom_cy + height * 0.47,
-             _icon_mix(_icon_rgb("#9d35ff"), _icon_rgb("#e463ff"), t))
+    for i in range(1, 6):
+        column = int(size * i / 6.0)
+        for y in range(int(size * 0.10), int(size * 0.90)):
+            blend(column, y, grid_colour, 0.08)
+    for i in range(1, 5):
+        row = int(size * i / 5.0)
+        for x in range(int(size * 0.05), int(size * 0.95)):
+            blend(x, row, grid_colour, 0.08)
 
-    for x, colour in ((size * 0.448, _icon_rgb("#dfe3ef")),
-                      (size * 0.588, _icon_rgb("#b45cff"))):
-        y = size * 0.13
-        while y < size * 0.87:
-            rect(x, y, x + max(1.0, size * 0.012), y + size * 0.035, colour)
-            y += size * 0.075
+    def draw_wave(centre_y, amplitude, colour):
+        for k in range(size + 1):
+            x = size * 0.05 + size * 0.90 * k / size
+            t = x / size
+            env = math.exp(-((t - 0.50) / 0.30) ** 2)
+            y = centre_y - amplitude * env * (
+                math.sin(t * 17.0 + 0.4) + 0.35 * math.sin(t * 33.0 + 2.0))
+            for width, alpha in ((0.100, 0.10), (0.062, 0.24), (0.034, 0.55),
+                                 (0.018, 1.0)):
+                half = max(0.5, size * width / 2.0)
+                base = int(round(y))
+                for offset in range(-int(half), int(half) + 1):
+                    blend(x, base + offset, colour, alpha)
 
-    arrow_y = size * 0.795
-    x_start, x_end = size * 0.455, size * 0.582
-    head = size * 0.042
-    thickness = max(1.0, size * 0.014)
-    rect(x_start + head * 0.6, arrow_y - thickness / 2,
-         x_end - head * 0.6, arrow_y + thickness / 2, _icon_rgb("#49c8ff"))
+    draw_wave(size * 0.345, size * 0.125, blue)
+    draw_wave(size * 0.630, size * 0.120, magenta)
+
+    white, purple, cyan, pink = (_icon_rgb("#e6e9f2"), _icon_rgb("#b45cff"),
+                                 _icon_rgb("#39d7ff"), _icon_rgb("#d05cff"))
+    thickness = max(1, int(size * 0.013))
+    for x, colour in ((size * 0.455, white), (size * 0.578, purple)):
+        y = size * 0.12
+        while y < size * 0.80:
+            for dx in range(thickness):
+                for dy in range(int(size * 0.030)):
+                    blend(x + dx, y + dy, colour, 1.0)
+            y += size * 0.062
+
+    arrow_y = size * 0.805
+    x0, x1 = size * 0.455, size * 0.578
+    head = max(1.5, size * 0.040)
+    for dx in range(int(x0 + head * 0.9), int(x1 - head * 0.9)):
+        for dy in range(thickness):
+            blend(dx, arrow_y + dy, cyan, 1.0)
     for i in range(int(head) + 1):
         half = head - i
-        rect(x_start + i, arrow_y - half, x_start + i, arrow_y + half,
-             _icon_rgb("#39d7ff"))
-        rect(x_end - i, arrow_y - half, x_end - i, arrow_y + half,
-             _icon_rgb("#d05cff"))
+        for dy in range(int(-half), int(half) + 1):
+            blend(x0 + i, arrow_y + dy, cyan, 1.0)
+            blend(x1 - i, arrow_y + dy, pink, 1.0)
 
     img = tk.PhotoImage(width=size, height=size)
     rows = []
@@ -4049,79 +4069,6 @@ def build_icon_photo(size: int = 64):
                 except Exception:
                     pass
     return img
-
-
-root.title(APP_NAME)
-try:
-    _icons = [build_icon_photo(n) for n in (64, 32, 16)]
-    root.iconphoto(True, *_icons)
-except Exception:
-    pass
-root.geometry("1680x940")
-root.minsize(1180, 700)
-root.configure(bg="#1a1a1a")
-root.resizable(True, True)
-
-# Apply dark title bar as soon as the window handle is available
-root.update()
-if not APP_LIGHT:
-    _apply_dark_titlebar(root)
-_apply_mica(root, APP_LIGHT)
-root.protocol("WM_DELETE_WINDOW", _on_close)
-
-if APP_LIGHT:
-    bg_main, bg_panel, bg_input = "#f3f3f3", "#ffffff", "#ffffff"
-    fg_main, fg_dim, fg_accent = "#1a1a1a", "#5a5a5a", "#0067c0"
-    btn_primary, btn_success, btn_hover = "#0067c0", "#0f7b0f", "#1a86d9"
-else:
-    bg_main, bg_panel, bg_input = "#1a1a1a", "#252525", "#2d2d2d"
-    fg_main, fg_dim, fg_accent = "#ffffff", "#aaaaaa", "#4a9eff"
-    btn_primary, btn_success, btn_hover = "#2a7de1", "#28a745", "#3d8bff"
-
-# the timeline panel uses its own names for the same palette
-BG_DARK, BG_PANEL, BG_INPUT = bg_main, bg_panel, bg_input
-FG_DIM, FG_ACCENT = fg_dim, fg_accent
-
-ref_var         = tk.IntVar(value=1)
-check_drift_var = tk.BooleanVar(value=False)
-
-
-# Progress bar – packed at the very bottom of the root window, full width
-progress_var = tk.DoubleVar(value=0)
-
-# Bottom status row: spinner + label + progress bar
-_status_row = tk.Frame(root, bg="#101010", height=26)
-_status_row.pack(side=tk.BOTTOM, fill=tk.X)
-_status_row.pack_propagate(False)
-
-progress_label = tk.Label(_status_row, text="", bg="#111111", fg="#888888",
-                           font=("Segoe UI", 8), anchor=tk.W)
-progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-# version on the right end of the status bar
-version_label = tk.Label(_status_row, text=APP_VERSION, bg="#111111",
-                         fg=fg_accent, font=("Segoe UI", 8, "bold"), anchor=tk.E)
-version_label.pack(side=tk.RIGHT, padx=(10, 12))
-
-# Dark-themed progress bar via ttk.Style
-_pb_style = ttk.Style(root)
-_pb_style.theme_use("default")
-_pb_style.configure(
-    "Dark.Horizontal.TProgressbar",
-    troughcolor="#1a1a1a",
-    background="#2a7de1",
-    bordercolor="#1a1a1a",
-    lightcolor="#2a7de1",
-    darkcolor="#2a7de1",
-    thickness=6,
-)
-
-progress_bar = ttk.Progressbar(root, variable=progress_var,
-                                maximum=100, mode='determinate',
-                                style="Dark.Horizontal.TProgressbar")
-progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
-
-
 
 def set_progress(pct: float, text: str = "") -> None:
     """Update the progress bar; safe from any thread."""

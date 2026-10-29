@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.24"
+APP_VERSION = "2.0.25"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2700,28 +2700,40 @@ def shift_track_by_ms(track, delta_ms: float):
 
 def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
     """
-    Drift the durations imply, with the framerates as a second opinion.
+    Drift the durations imply, cross-checked against the framerates.
 
-    Running times are the reliable signal: a 50 fps TV rip carries normal-speed
-    audio, so the fps ratio alone would suggest a nonsense -520 ms/s.  The
-    duration ratio gives the real speed change; the framerates only confirm it,
-    and when they disagree the durations win.
+    A real speed change is one of a few known ratios (25/23.976 PAL, 24/23.976,
+    25/24); anything else that makes the running times differ is a different
+    edit - a longer intro, added credits - and must not become a drift hint.
+    The framerates only confirm it, and a 2x ratio means a TV rip with doubled
+    frames, where the length ratio is the only usable signal.
     """
+    known = (25.0 / 23.976, 24.0 / 23.976, 25.0 / 24.0)
     if fps_ref is None or fps_tgt is None:
         fps_ref, fps_tgt = probe_framerate(ref_path), probe_framerate(tgt_path)
     dur_ref = _get_file_duration(ref_path)
     dur_tgt = _get_file_duration(tgt_path)
-    if dur_ref > 60 and dur_tgt > 60:
-        length_ratio = dur_ref / dur_tgt
-        if abs(length_ratio - 1.0) < 0.005:
-            return None
-        implied = (length_ratio - 1.0) * 1000.0
+
+    if not (dur_ref > 60 and dur_tgt > 60):
         if fps_ref and fps_tgt and abs(fps_ref - fps_tgt) > 1e-9:
-            if abs(length_ratio - fps_ref / fps_tgt) < 0.02:
-                return framerate_slope(fps_ref, fps_tgt)
-        return implied
-    if fps_ref and fps_tgt and abs(fps_ref - fps_tgt) > 1e-9:
+            return framerate_slope(fps_ref, fps_tgt)
+        return None
+
+    length_ratio = dur_ref / dur_tgt
+    if abs(length_ratio - 1.0) < 0.005:
+        return None                      # same running time: no speed change
+    if abs(length_ratio - 1.0) > 0.08:
+        return None                      # far too big for a speed change
+
+    from_ratio = (length_ratio - 1.0) * 1000.0
+    if not (fps_ref and fps_tgt) or abs(fps_ref - fps_tgt) < 1e-9:
+        return None                      # same framerate: the gap is an edit
+    fps_ratio = fps_ref / fps_tgt
+    if abs(length_ratio - fps_ratio) < 0.02:
         return framerate_slope(fps_ref, fps_tgt)
+    if 0.45 < fps_ratio < 0.55 or 1.95 < fps_ratio < 2.05:
+        if any(abs(length_ratio - k) < 0.01 for k in known):
+            return from_ratio            # TV rip with doubled frames
     return None
 
 

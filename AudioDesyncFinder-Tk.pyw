@@ -3951,7 +3951,7 @@ class TimelinePanel:
 root = tk.Tk()
 if sv_ttk is not None:
     sv_ttk.set_theme("light" if APP_LIGHT else "dark")
-root.title(f"{APP_NAME} {APP_VERSION} - Tk")
+root.title(APP_NAME)
 root.geometry("1680x940")
 root.minsize(1180, 700)
 root.configure(bg="#1a1a1a")
@@ -3992,6 +3992,11 @@ _status_row.pack_propagate(False)
 progress_label = tk.Label(_status_row, text="", bg="#111111", fg="#888888",
                            font=("Segoe UI", 8), anchor=tk.W)
 progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+# version on the right end of the status bar
+version_label = tk.Label(_status_row, text=APP_VERSION, bg="#111111",
+                         fg=fg_accent, font=("Segoe UI", 8, "bold"), anchor=tk.E)
+version_label.pack(side=tk.RIGHT, padx=(10, 12))
 
 # Dark-themed progress bar via ttk.Style
 _pb_style = ttk.Style(root)

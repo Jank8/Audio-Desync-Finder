@@ -1242,7 +1242,7 @@ class Card(CardWidget):
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} {APP_VERSION} - Qt")
+        self.setWindowTitle(APP_NAME)
         self.resize(1240, 860)
         self.setMicaEffectEnabled(True)
         self.setMinimumSize(1000, 640)
@@ -1259,6 +1259,15 @@ class MainWindow(FluentWindow):
         self.chart_grid = "#00000022" if LIGHT else "#ffffff22"
         self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
         self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
+        try:
+            version = QLabel(APP_VERSION)
+            version.setStyleSheet(
+                f"color: {self.accent}; font: 600 9pt 'Segoe UI';")
+            version.setContentsMargins(0, 0, 12, 0)
+            bar = self.titleBar.hBoxLayout
+            bar.insertWidget(max(0, bar.count() - 1), version)
+        except Exception:
+            pass
         self.settings = QSettings("AudioDesync", "AudioDesyncFinder")
         self.last_dir = str(self.settings.value("last_dir", "") or "")
         self.stop_event = threading.Event()

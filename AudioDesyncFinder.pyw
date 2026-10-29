@@ -4,21 +4,9 @@ A single file: the user interface and the analysis engine live together.
 Run: pythonw AudioDesyncFinder.pyw
 """
 
-# Audio Desync Finder - audio offset detection and correction
-# Copyright (C) 2026 Janusz Wozniak
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# Audio Desync Finder - Copyright (C) 2026 Janusz Wozniak
+# Licensed under the GNU General Public License v3 or later.
+# See LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt - no warranty.
 
 # ---------------------------------------------------------------------------
 # DEPENDENCY BOOTSTRAP - runs before the Qt imports below.
@@ -1209,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.15"
+APP_VERSION = "3.0.16"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

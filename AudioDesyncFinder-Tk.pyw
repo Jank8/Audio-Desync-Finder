@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.20"
+APP_VERSION = "2.0.21"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -3974,12 +3974,7 @@ def _icon_blend(dst, src, alpha: float):
 
 
 def build_icon_photo(size: int = 64):
-    """
-    Same neon waveform icon as the Qt build, rasterised by hand.
-
-    Tk has no vector painter and PhotoImage has no alpha channel, so the shapes
-    are blended into a pixel buffer and handed over row by row.
-    """
+    """Smooth-wave icon, rasterised by hand (same design as the Qt build)."""
     import math
 
     bg0, bg1 = _icon_rgb("#0a1330"), _icon_rgb("#141f4d")
@@ -4028,8 +4023,8 @@ def build_icon_photo(size: int = 64):
     draw_wave(size * 0.345, size * 0.125, blue)
     draw_wave(size * 0.630, size * 0.120, magenta)
 
-    white, purple, cyan, pink = (_icon_rgb("#e6e9f2"), _icon_rgb("#b45cff"),
-                                 _icon_rgb("#39d7ff"), _icon_rgb("#d05cff"))
+    white, purple = _icon_rgb("#e6e9f2"), _icon_rgb("#b45cff")
+    cyan, pink = _icon_rgb("#39d7ff"), _icon_rgb("#d05cff")
     thickness = max(1, int(size * 0.013))
     for x, colour in ((size * 0.455, white), (size * 0.578, purple)):
         y = size * 0.12
@@ -4042,7 +4037,7 @@ def build_icon_photo(size: int = 64):
     arrow_y = size * 0.805
     x0, x1 = size * 0.455, size * 0.578
     head = max(1.5, size * 0.040)
-    for dx in range(int(x0 + head * 0.9), int(x1 - head * 0.9)):
+    for dx in range(int(x0 + head), int(x1 - head)):
         for dy in range(thickness):
             blend(dx, arrow_y + dy, cyan, 1.0)
     for i in range(int(head) + 1):
@@ -4069,6 +4064,79 @@ def build_icon_photo(size: int = 64):
                 except Exception:
                     pass
     return img
+
+
+root.title(APP_NAME)
+try:
+    _icons = [build_icon_photo(n) for n in (64, 32, 16)]
+    root.iconphoto(True, *_icons)
+except Exception:
+    pass
+root.geometry("1680x940")
+root.minsize(1180, 700)
+root.configure(bg="#1a1a1a")
+root.resizable(True, True)
+
+# Apply dark title bar as soon as the window handle is available
+root.update()
+if not APP_LIGHT:
+    _apply_dark_titlebar(root)
+_apply_mica(root, APP_LIGHT)
+root.protocol("WM_DELETE_WINDOW", _on_close)
+
+if APP_LIGHT:
+    bg_main, bg_panel, bg_input = "#f3f3f3", "#ffffff", "#ffffff"
+    fg_main, fg_dim, fg_accent = "#1a1a1a", "#5a5a5a", "#0067c0"
+    btn_primary, btn_success, btn_hover = "#0067c0", "#0f7b0f", "#1a86d9"
+else:
+    bg_main, bg_panel, bg_input = "#1a1a1a", "#252525", "#2d2d2d"
+    fg_main, fg_dim, fg_accent = "#ffffff", "#aaaaaa", "#4a9eff"
+    btn_primary, btn_success, btn_hover = "#2a7de1", "#28a745", "#3d8bff"
+
+# the timeline panel uses its own names for the same palette
+BG_DARK, BG_PANEL, BG_INPUT = bg_main, bg_panel, bg_input
+FG_DIM, FG_ACCENT = fg_dim, fg_accent
+
+ref_var         = tk.IntVar(value=1)
+check_drift_var = tk.BooleanVar(value=False)
+
+
+# Progress bar – packed at the very bottom of the root window, full width
+progress_var = tk.DoubleVar(value=0)
+
+# Bottom status row: spinner + label + progress bar
+_status_row = tk.Frame(root, bg="#101010", height=26)
+_status_row.pack(side=tk.BOTTOM, fill=tk.X)
+_status_row.pack_propagate(False)
+
+progress_label = tk.Label(_status_row, text="", bg="#111111", fg="#888888",
+                           font=("Segoe UI", 8), anchor=tk.W)
+progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+# version on the right end of the status bar
+version_label = tk.Label(_status_row, text=APP_VERSION, bg="#111111",
+                         fg=fg_accent, font=("Segoe UI", 8, "bold"), anchor=tk.E)
+version_label.pack(side=tk.RIGHT, padx=(10, 12))
+
+# Dark-themed progress bar via ttk.Style
+_pb_style = ttk.Style(root)
+_pb_style.theme_use("default")
+_pb_style.configure(
+    "Dark.Horizontal.TProgressbar",
+    troughcolor="#1a1a1a",
+    background="#2a7de1",
+    bordercolor="#1a1a1a",
+    lightcolor="#2a7de1",
+    darkcolor="#2a7de1",
+    thickness=6,
+)
+
+progress_bar = ttk.Progressbar(root, variable=progress_var,
+                                maximum=100, mode='determinate',
+                                style="Dark.Horizontal.TProgressbar")
+progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+
 
 def set_progress(pct: float, text: str = "") -> None:
     """Update the progress bar; safe from any thread."""

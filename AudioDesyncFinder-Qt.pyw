@@ -1197,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.20"
+APP_VERSION = "3.0.21"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1357,7 +1357,6 @@ class MainWindow(FluentWindow):
         try:
             self.titleBar.hBoxLayout.setSpacing(6)
             self.titleBar.titleLabel.setContentsMargins(0, 0, 0, 0)
-            self.titleBar.titleLabel.setStyleSheet('padding: 0; margin: 0;')
             self.titleBar.iconLabel.setContentsMargins(0, 0, 0, 0)
         except Exception:
             pass

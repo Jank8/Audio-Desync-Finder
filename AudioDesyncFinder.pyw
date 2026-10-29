@@ -1,8 +1,25 @@
 """Audio Desync Finder 3.0 - PySide6 + Fluent, Mica backdrop.
 
-The analysis engine lives in sync_py; this file is only the UI.
-Run: pythonw audiosync4.pyw
+A single file: the user interface and the analysis engine live together.
+Run: pythonw AudioDesyncFinder.pyw
 """
+
+# Audio Desync Finder - audio offset detection and correction
+# Copyright (C) 2026 Janusz Wozniak
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # ---------------------------------------------------------------------------
 # DEPENDENCY BOOTSTRAP - runs before the Qt imports below.
 # A fresh Python installation has none of these; install them first so a
@@ -1192,7 +1209,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.14"
+APP_VERSION = "3.0.15"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

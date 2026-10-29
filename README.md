@@ -58,4 +58,6 @@ Every release carries both files: the current app and the Tk fallback.
 
 ## License
 
-MIT
+GNU GPL v3 - see `LICENSE`. Use it, study it, change it. If you distribute a
+modified version it must stay under the same license and ship its source, so
+improvements come back to everyone.

@@ -1242,7 +1242,7 @@ class Card(CardWidget):
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION} - Qt")
         self.resize(1240, 860)
         self.setMicaEffectEnabled(True)
         self.setMinimumSize(1000, 640)

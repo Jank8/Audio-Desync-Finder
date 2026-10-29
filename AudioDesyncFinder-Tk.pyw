@@ -3951,7 +3951,7 @@ class TimelinePanel:
 root = tk.Tk()
 if sv_ttk is not None:
     sv_ttk.set_theme("light" if APP_LIGHT else "dark")
-root.title(f"{APP_NAME} {APP_VERSION} – precise audio offset detection")
+root.title(f"{APP_NAME} {APP_VERSION} - Tk")
 root.geometry("1680x940")
 root.minsize(1180, 700)
 root.configure(bg="#1a1a1a")

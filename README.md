@@ -25,7 +25,7 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 ## Usage
 
-1. Run `AudioDesyncFinder-Qt-3.0.18.pyw`.
+1. Run `AudioDesyncFinder-Qt.pyw`.
 2. Pick both files and set **Base** on the one whose timeline you keep.
 3. **Auto-scan whole file**, check the model, then **Export corrected audio**.
 4. Mux the `.mka` with mkvmerge - no `--sync`, no delay.
@@ -53,9 +53,9 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 Two builds sit side by side, same engine, same results:
 
-- `AudioDesyncFinder-Qt-3.0.18.pyw` - **3.0.18**, Qt/Fluent interface with Mica (needs PySide6,
+- `AudioDesyncFinder-Qt.pyw` - **3.0.18**, Qt/Fluent interface with Mica (needs PySide6,
   which installs itself)
-- `AudioDesyncFinder-Tk-2.0.18.pyw` - **2.0.18**, Tk interface (needs only numpy, scipy,
+- `AudioDesyncFinder-Tk.pyw` - **2.0.18**, Tk interface (needs only numpy, scipy,
   matplotlib and FFmpeg)
 
 **The only difference is the UI.** Scanning, the offset model, drift and jump

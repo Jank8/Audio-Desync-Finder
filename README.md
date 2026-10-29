@@ -47,8 +47,10 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 ## Files
 
-- `AudioDesyncFinder.pyw` - the application (single file)
-- `legacy/audiosync3_tk.pyw` - the 2.x Tk version
+- `AudioDesyncFinder.pyw` - the application (single file, Python 3.9+)
+- `legacy/audiosync3_tk.pyw` - the 2.x Tk version (numpy, scipy, matplotlib, FFmpeg)
+
+Every release carries both files: the current app and the Tk fallback.
 
 ## License
 

@@ -891,11 +891,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # neighbour; the outlier rejection in _fit_group drops them afterwards.
     folded = []
     for group in groups:
-        if folded and len(group) < 2:
+        if folded and len(group) < 3:
             folded[-1].extend(group)
         else:
             folded.append(list(group))
-    if len(folded) > 1 and len(folded[0]) < 2:
+    if len(folded) > 1 and len(folded[0]) < 3:
         folded[1] = folded[0] + folded[1]
         folded.pop(0)
     groups = folded
@@ -1270,7 +1270,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.26"
+APP_VERSION = "3.0.27"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1807,6 +1807,11 @@ class MainWindow(FluentWindow):
             elif kind == "plan":
                 self.plan = payload
                 self.model_view.setPlainText("\n".join(plan_lines(payload)[:10]))
+                if not payload.get("segments"):
+                    best = max((float(p.get("conf", 0.0)) for p in self.points), default=0.0)
+                    self.model_view.setPlainText(
+                        f"No point passed the confidence filter (best seen: {best:.1f}).\n"
+                        "Lower Min confidence, raise Window or switch Signal.")
                 self._update_summary()
                 self._draw()
                 self.btn_export.setEnabled(bool(payload.get("segments")))

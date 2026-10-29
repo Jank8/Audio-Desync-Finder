@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.26"
+APP_VERSION = "2.0.27"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2800,11 +2800,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # neighbour; the outlier rejection in _fit_group drops them afterwards.
     folded = []
     for group in groups:
-        if folded and len(group) < 2:
+        if folded and len(group) < 3:
             folded[-1].extend(group)
         else:
             folded.append(list(group))
-    if len(folded) > 1 and len(folded[0]) < 2:
+    if len(folded) > 1 and len(folded[0]) < 3:
         folded[1] = folded[0] + folded[1]
         folded.pop(0)
     groups = folded

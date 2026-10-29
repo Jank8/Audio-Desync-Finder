@@ -1,7 +1,7 @@
 """Audio Desync Finder 3.0 - PySide6 + Fluent, Mica backdrop.
 
 A single file: the user interface and the analysis engine live together.
-Run: pythonw AudioDesyncFinder.pyw
+Run: pythonw AudioDesyncFinder-Qt-3.0.18.pyw
 """
 
 # Audio Desync Finder - Copyright (C) 2026 Janusz Woźniak

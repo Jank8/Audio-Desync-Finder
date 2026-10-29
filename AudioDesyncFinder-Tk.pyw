@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.25"
+APP_VERSION = "2.0.26"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------

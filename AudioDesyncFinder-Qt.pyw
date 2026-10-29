@@ -1270,7 +1270,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.25"
+APP_VERSION = "3.0.26"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1704,8 +1704,8 @@ class MainWindow(FluentWindow):
                 progress=lambda m: self.ui_queue.put(("log", m)),
                 on_fraction=lambda phase, f: self.ui_queue.put(
                     ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                  f"Decoding {phase}… {f * 100:.0f}%")),
-                should_stop=self.stop_event.is_set))
+                                  f"Decoding {phase}… {f * 100:.0f}%"))),
+                should_stop=self.stop_event.is_set)
             if self.stop_event.is_set():
                 self.ui_queue.put(("log", "Stopped by the user."))
                 return

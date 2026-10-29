@@ -96,7 +96,7 @@ import sys
 import threading
 
 from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QIntValidator
+from PySide6.QtGui import QColor, QDoubleValidator, QIcon, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
@@ -1270,7 +1270,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.27"
+APP_VERSION = "3.0.28"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1510,7 +1510,7 @@ class MainWindow(FluentWindow):
         self.entry_conf.setText("2")
         self.entry_conf.setFixedWidth(110)
         self.entry_conf.setAlignment(Qt.AlignCenter)
-        self.entry_conf.setValidator(QIntValidator(1, 60, self))
+        self.entry_conf.setValidator(QDoubleValidator(0.5, 60.0, 2, self))
         sl.addWidget(self.entry_conf)
         sl.addWidget(StrongBodyLabel("Signal"))
         self.combo_signal = ComboBox()
@@ -1917,10 +1917,9 @@ class MainWindow(FluentWindow):
         return super().nativeEvent(eventType, message)
 
     def _num(self, edit, default):
-        """Read an int from a text field, falling back to the default."""
+        """Read a number from a text field, falling back to the default."""
         try:
-            value = int(str(edit.text()).strip())
-            return float(value)
+            return float(str(edit.text()).strip().replace(",", "."))
         except (TypeError, ValueError):
             return float(default)
 

@@ -64,7 +64,7 @@ def _install_dependencies(packages):
         cmd = [sys.executable, "-m", "pip", "install",
                "--disable-pip-version-check", "--no-input", *packages]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
             result["ok"] = proc.returncode == 0
         except Exception:
             result["ok"] = False
@@ -1197,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.17"
+APP_VERSION = "3.0.18"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

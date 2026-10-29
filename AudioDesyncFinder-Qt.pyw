@@ -296,7 +296,8 @@ def _get_file_duration(path: str) -> float:
         return 0.0
 
 
-def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
+def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
+                  should_stop=None):
     """
     Decode the first audio stream of *path* to mono 16-bit PCM at *sr*.
 
@@ -326,6 +327,9 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
                     except ValueError:
                         continue
                     on_fraction(max(0.0, min(1.0, seconds / total)))
+                if should_stop is not None and should_stop():
+                    proc.kill()
+                    raise RuntimeError("Cancelled by the user")
             stderr = proc.stderr.read()
         finally:
             try:
@@ -355,7 +359,8 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     return rate, np.ascontiguousarray(data.astype(np.int16, copy=False))
 
 
-def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None):
+def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None,
+                should_stop=None):
     """
     Decode both files once and return (ref, target, meta).
 
@@ -372,10 +377,10 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
 
     if progress:
         progress("Decoding reference…")
-    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"))
+    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), should_stop=should_stop)
     if progress:
         progress("Decoding target…")
-    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"))
+    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"), should_stop=should_stop)
     sr = SCAN_SR
     meta = {
         "sr": sr,
@@ -1253,7 +1258,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.23"
+APP_VERSION = "3.0.24"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1641,8 +1646,9 @@ class MainWindow(FluentWindow):
         info += "      →      Target: " + os.path.basename(tgt)
         if t:
             info += f"   [{t:g} fps]"
-        if r and t and abs(r - t) > 1e-6:
-            info += f"      atempo {r / t:.6f}"
+        hint = speed_hint(ref, tgt)
+        if hint is not None:
+            info += f"      drift {hint:+.1f} ms/s      atempo {1.0 + hint / 1000.0:.6f}"
         self.fps_label.setText(info)
         self.status.setText("Ready")
 
@@ -1686,7 +1692,11 @@ class MainWindow(FluentWindow):
                 progress=lambda m: self.ui_queue.put(("log", m)),
                 on_fraction=lambda phase, f: self.ui_queue.put(
                     ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                  f"Decoding {phase}… {f * 100:.0f}%"))))
+                                  f"Decoding {phase}… {f * 100:.0f}%")),
+                should_stop=self.stop_event.is_set))
+            if self.stop_event.is_set():
+                self.ui_queue.put(("log", "Stopped by the user."))
+                return
             self.meta = meta
 
             hint = self._fps_hint()
@@ -1714,6 +1724,9 @@ class MainWindow(FluentWindow):
                                   f"Measuring {done}/{total}"))),
                 should_stop=self.stop_event.is_set)
             points = sorted(compensate_points(points, rate), key=lambda p: p["t"])
+            if self.stop_event.is_set():
+                self.ui_queue.put(("log", "Stopped by the user."))
+                return
             if coarse:
                 for point in points:
                     point["offset"] = round(point["offset"] + coarse, 2)

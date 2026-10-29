@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.18"
+APP_VERSION = "2.0.19"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -3948,10 +3948,115 @@ class TimelinePanel:
 # An install-bar is packed above the console initially hidden; it becomes
 # visible when FFmpeg is not found at startup.
 # ===========================================================================
+try:
+    import ctypes as _ctypes
+    _ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        "Jank8.AudioDesyncFinder")
+except Exception:
+    pass
+
+
 root = tk.Tk()
 if sv_ttk is not None:
     sv_ttk.set_theme("light" if APP_LIGHT else "dark")
+def _icon_rgb(value: str):
+    return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _icon_mix(a, b, t: float):
+    return tuple(int(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def build_icon_photo(size: int = 64):
+    """
+    Same neon waveform icon as the Qt build, rasterised by hand.
+
+    Tk has no vector painter, so the shapes are written into a pixel buffer and
+    handed to a PhotoImage row by row. No image files involved.
+    """
+    import math
+
+    bg0, bg1 = _icon_rgb("#070d24"), _icon_rgb("#1a1f5e")
+    buf = [[None] * size for _ in range(size)]
+    radius = 0.22 * size
+
+    for y in range(size):
+        for x in range(size):
+            dx, dy = min(x, size - 1 - x), min(y, size - 1 - y)
+            if dx < radius and dy < radius:
+                if (radius - dx) ** 2 + (radius - dy) ** 2 > radius * radius:
+                    continue
+            buf[y][x] = _icon_mix(bg0, bg1, (x + y) / (2.0 * (size - 1)))
+
+    def rect(x0, y0, x1, y1, colour):
+        for yy in range(int(round(y0)), int(round(y1)) + 1):
+            if not 0 <= yy < size:
+                continue
+            for xx in range(int(round(x0)), int(round(x1)) + 1):
+                if 0 <= xx < size:
+                    buf[yy][xx] = colour
+
+    count = 13
+    step = 0.84 * size / (count - 1)
+    left = size * 0.5 - 0.84 * size / 2
+    bar_w = max(1.0, size * 0.05)
+    top_cy, bottom_cy = size * 0.345, size * 0.635
+    for i in range(count):
+        factor = math.exp(-((i - (count - 1) / 2) / (count * 0.26)) ** 2)
+        height = size * 0.30 * factor + size * 0.02
+        t = i / (count - 1)
+        x0 = left + i * step - bar_w / 2
+        rect(x0, top_cy - height / 2, x0 + bar_w, top_cy + height / 2,
+             _icon_mix(_icon_rgb("#1a86ff"), _icon_rgb("#63e9ff"), t))
+        rect(x0, bottom_cy - height * 0.45, x0 + bar_w, bottom_cy + height * 0.47,
+             _icon_mix(_icon_rgb("#9d35ff"), _icon_rgb("#e463ff"), t))
+
+    for x, colour in ((size * 0.448, _icon_rgb("#dfe3ef")),
+                      (size * 0.588, _icon_rgb("#b45cff"))):
+        y = size * 0.13
+        while y < size * 0.87:
+            rect(x, y, x + max(1.0, size * 0.012), y + size * 0.035, colour)
+            y += size * 0.075
+
+    arrow_y = size * 0.795
+    x_start, x_end = size * 0.455, size * 0.582
+    head = size * 0.042
+    thickness = max(1.0, size * 0.014)
+    rect(x_start + head * 0.6, arrow_y - thickness / 2,
+         x_end - head * 0.6, arrow_y + thickness / 2, _icon_rgb("#49c8ff"))
+    for i in range(int(head) + 1):
+        half = head - i
+        rect(x_start + i, arrow_y - half, x_start + i, arrow_y + half,
+             _icon_rgb("#39d7ff"))
+        rect(x_end - i, arrow_y - half, x_end - i, arrow_y + half,
+             _icon_rgb("#d05cff"))
+
+    img = tk.PhotoImage(width=size, height=size)
+    rows = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            colour = buf[y][x]
+            row.append("#%02x%02x%02x" % colour if colour else "#000000")
+        rows.append("{" + " ".join(row) + "}")
+    img.put(" ".join(rows))
+
+    for y in range(size):
+        for x in range(size):
+            if buf[y][x] is None:
+                try:
+                    img.transparency_set(x, y, True)
+                except Exception:
+                    pass
+    return img
+
+
 root.title(APP_NAME)
+try:
+    _icons = [build_icon_photo(n) for n in (64, 32, 16)]
+    root.iconphoto(True, *_icons)
+except Exception:
+    pass
 root.geometry("1680x940")
 root.minsize(1180, 700)
 root.configure(bg="#1a1a1a")

@@ -96,7 +96,7 @@ import sys
 import threading
 
 from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QColor, QIntValidator
+from PySide6.QtGui import QColor, QIcon, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
@@ -1197,7 +1197,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.18"
+APP_VERSION = "3.0.19"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1216,6 +1216,95 @@ def system_is_light() -> bool:
             return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
     except Exception:
         return False
+
+
+def _lerp_colour(a: str, b: str, t: float) -> QColor:
+    ca, cb = QColor(a), QColor(b)
+    return QColor(int(ca.red() + (cb.red() - ca.red()) * t),
+                  int(ca.green() + (cb.green() - ca.green()) * t),
+                  int(ca.blue() + (cb.blue() - ca.blue()) * t))
+
+
+def build_icon(size: int = 256) -> QIcon:
+    """
+    Neon waveform icon drawn entirely in code - no image files.
+
+    Navy rounded square, a blue wave above a purple one, two dashed guides and
+    a double arrow showing the correction.
+    """
+    import math
+
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import (QBrush, QLinearGradient, QPainter, QPainterPath,
+                               QPen, QPixmap)
+
+    icon = QIcon()
+    for px in (16, 24, 32, 48, 64, 128, 256):
+        pm = QPixmap(px, px)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        u = px / 256.0
+
+        grad = QLinearGradient(0, 0, px, px)
+        grad.setColorAt(0.0, QColor("#070d24"))
+        grad.setColorAt(1.0, QColor("#1a1f5e"))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRoundedRect(QRectF(1, 1, px - 2, px - 2), 56 * u, 56 * u)
+
+        n = 13
+        step = (px * 0.84) / (n - 1)
+        left = px * 0.5 - (px * 0.84) / 2
+        bar_w = max(1.5, px * 0.050)
+        for i in range(n):
+            f = math.exp(-((i - (n - 1) / 2) / (n * 0.26)) ** 2)
+            height = px * 0.30 * f + px * 0.018
+            x = left + i * step - bar_w / 2
+            t = i / (n - 1)
+            p.setBrush(_lerp_colour("#1a86ff", "#63e9ff", t))
+            p.drawRoundedRect(QRectF(x, px * 0.345 - height / 2, bar_w, height),
+                              bar_w / 2, bar_w / 2)
+            p.setBrush(_lerp_colour("#9d35ff", "#e463ff", t))
+            p.drawRoundedRect(QRectF(x, px * 0.635 - height * 0.45, bar_w,
+                                     height * 0.92), bar_w / 2, bar_w / 2)
+
+        # dashed guides
+        for x, colour in ((px * 0.448, "#dfe3ef"), (px * 0.588, "#b45cff")):
+            pen = QPen(QColor(colour))
+            pen.setWidthF(max(1.0, px * 0.012))
+            pen.setDashPattern([2.2, 2.2])
+            p.setPen(pen)
+            p.drawLine(QPointF(x, px * 0.13), QPointF(x, px * 0.87))
+
+        # double arrow
+        y = px * 0.795
+        x0, x1 = px * 0.455, px * 0.582
+        head = px * 0.042
+        p.setPen(Qt.NoPen)
+        left_arrow = QPainterPath()
+        left_arrow.moveTo(x0, y)
+        left_arrow.lineTo(x0 + head, y - head)
+        left_arrow.lineTo(x0 + head, y + head)
+        left_arrow.closeSubpath()
+        p.fillPath(left_arrow, QColor("#39d7ff"))
+        right_arrow = QPainterPath()
+        right_arrow.moveTo(x1, y)
+        right_arrow.lineTo(x1 - head, y - head)
+        right_arrow.lineTo(x1 - head, y + head)
+        right_arrow.closeSubpath()
+        p.fillPath(right_arrow, QColor("#d05cff"))
+        pen = QPen(QColor("#59c8ff"))
+        pen.setWidthF(max(1.0, px * 0.016))
+        p.setPen(pen)
+        p.drawLine(QPointF(x0 + head * 0.8, y), QPointF(px * 0.52, y))
+        pen.setColor(QColor("#c46bff"))
+        p.setPen(pen)
+        p.drawLine(QPointF(px * 0.52, y), QPointF(x1 - head * 0.8, y))
+
+        p.end()
+        icon.addPixmap(pm)
+    return icon
 
 
 def system_accent_hex() -> str:
@@ -1243,6 +1332,7 @@ class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(build_icon(256))
         self.resize(1240, 860)
         self.setMicaEffectEnabled(True)
         self.setMinimumSize(1000, 640)
@@ -1759,6 +1849,14 @@ class MainWindow(FluentWindow):
         ax.set_xlabel("Time (s)", color=self.chart_fg, fontsize=8)
         ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
         self.canvas.draw_idle()
+
+
+try:
+    import ctypes as _ctypes
+    _ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        "Jank8.AudioDesyncFinder")
+except Exception:
+    pass
 
 
 def main():

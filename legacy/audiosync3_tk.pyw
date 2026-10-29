@@ -70,7 +70,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2619,26 +2619,47 @@ def compensate_points(points, rate: float):
 
 def _fit_group(group, fallback_slope: float, outlier_ms: float):
     """
-    Least-squares line through one group of points, with iterative outlier
-    removal.  Returns (slope ms/s, intercept ms, kept_points, rms ms).
+    Robust straight line through one group of points.
+
+    The previous version used a plain least-squares fit with a fixed 120 ms
+    rejection radius, so a cluster of noisy measurements (50-150 ms off, which
+    happens with different dubs) dragged the line and produced fictitious jumps.
+
+    Now: Theil-Sen for the initial slope (median of pairwise slopes, immune to
+    outliers), then least squares on inliers whose radius adapts to the measured
+    spread (5 x MAD), never wider than the caller's limit.
     """
     pts = [dict(p) for p in group]
-    slope, intercept = float(fallback_slope), 0.0
-    resid = np.zeros(len(pts))
+    ts = np.array([p["t"] for p in pts], dtype=float)
+    ys = np.array([p["offset"] for p in pts], dtype=float)
 
-    for _ in range(4):
-        ts = np.array([p["t"] for p in pts], dtype=float)
-        os_ = np.array([p["offset"] for p in pts], dtype=float)
-        if len(pts) >= 2 and float(ts.max() - ts.min()) > 0.5:
-            slope, intercept = np.polyfit(ts, os_, 1)
-        else:
-            slope = float(fallback_slope)
-            intercept = float(os_[0] - slope * ts[0])
-        resid = os_ - (slope * ts + intercept)
-        keep = np.abs(resid) <= outlier_ms
+    if len(pts) >= 3 and float(ts.max() - ts.min()) > 0.5:
+        slopes = []
+        for a in range(len(pts)):
+            for b in range(a + 1, len(pts)):
+                dt = ts[b] - ts[a]
+                if abs(dt) > 0.5:
+                    slopes.append((ys[b] - ys[a]) / dt)
+        slope = float(np.median(slopes)) if slopes else float(fallback_slope)
+        intercept = float(np.median(ys - slope * ts))
+    else:
+        slope = float(fallback_slope)
+        intercept = float(ys[0] - slope * ts[0])
+
+    resid = ys - (slope * ts + intercept)
+    for _ in range(5):
+        mad = float(np.median(np.abs(resid - np.median(resid))))
+        radius = min(outlier_ms, max(12.0, 5.0 * mad))
+        keep = np.abs(resid) <= radius
         if bool(keep.all()) or int(keep.sum()) < 2:
             break
         pts = [p for p, k in zip(pts, keep) if k]
+        ts = np.array([p["t"] for p in pts], dtype=float)
+        ys = np.array([p["offset"] for p in pts], dtype=float)
+        if float(ts.max() - ts.min()) <= 0.5:
+            break
+        slope, intercept = np.polyfit(ts, ys, 1)
+        resid = ys - (slope * ts + intercept)
 
     rms = float(np.sqrt(np.mean(resid ** 2))) if len(resid) else 0.0
     return float(slope), float(intercept), pts, rms

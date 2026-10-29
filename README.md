@@ -51,10 +51,16 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 ## Files
 
-- `AudioDesyncFinder.pyw` - the application (single file, Python 3.9+)
-- `legacy/audiosync3_tk-2.0.18.pyw` - the 2.x Tk version (numpy, scipy, matplotlib, FFmpeg)
+Two builds sit side by side, same engine, same results:
 
-Every release carries both files: the current app and the Tk fallback.
+- `AudioDesyncFinder.pyw` - **3.0.18**, Qt/Fluent interface with Mica (needs PySide6,
+  which installs itself)
+- `audiosync3_tk-2.0.18.pyw` - **2.0.18**, Tk interface (needs only numpy, scipy,
+  matplotlib and FFmpeg)
+
+**The only difference is the UI.** Scanning, the offset model, drift and jump
+handling, export and residual measurement are the same code in both files, so
+either one produces an identical `.mka`. Pick whichever starts on your machine.
 
 ## License
 

@@ -990,6 +990,14 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                 merged_segments.append(seg)
         segments = merged_segments
 
+    # ---- 5c. tiny drifts are noise: keep the segment flat ----------------
+    # Resampling by 0.05 % for a few hundred seconds costs quality and buys
+    # nothing; below half a millisecond per second the plateau is flat.
+    for seg in segments:
+        if not seg.get("locked") and abs(seg["slope"]) < 0.5:
+            seg["slope"] = 0.0
+            seg["atempo"] = 1.0
+
     # ---- 6. jumps + sanity warnings --------------------------------------
     jumps = []
     for prev, cur in zip(segments, segments[1:]):
@@ -1339,7 +1347,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.29"
+APP_VERSION = "3.0.30"
 LIGHT = False
 
 ACCENT = "#4cc2ff"

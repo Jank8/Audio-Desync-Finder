@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.29"
+APP_VERSION = "2.0.30"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2898,6 +2898,14 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             else:
                 merged_segments.append(seg)
         segments = merged_segments
+
+    # ---- 5c. tiny drifts are noise: keep the segment flat ----------------
+    # Resampling by 0.05 % for a few hundred seconds costs quality and buys
+    # nothing; below half a millisecond per second the plateau is flat.
+    for seg in segments:
+        if not seg.get("locked") and abs(seg["slope"]) < 0.5:
+            seg["slope"] = 0.0
+            seg["atempo"] = 1.0
 
     # ---- 6. jumps + sanity warnings --------------------------------------
     jumps = []

@@ -28,6 +28,9 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 1. Run `AudioDesyncFinder-Qt.pyw`.
 2. Pick both files and set **Base** on the one whose timeline you keep.
 3. **Auto-scan whole file**, check the model, then **Export corrected audio**.
+   If the model is a single line with no drift, the header tells you the delay
+   to type into MKVToolNix instead - muxing the untouched audio is lossless, so
+   there is nothing to export in that case.
 4. Mux the `.mka` with mkvmerge - no `--sync`, no delay.
 
 ## Controls
@@ -45,7 +48,7 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 | **Chart** | offset over time: dots are measurements, the green line is the fitted model |
 | **Table** | every measurement with time, offset, confidence and source (`wave` / `env`) |
 | **Delete selected point** | drops a bad measurement and re-fits the model at once |
-| **Fitted model** | one line per segment: time range, offset at its start, drift in ms/s and the resulting `atempo` |
+| **Fitted model** | one line per segment: time range, offset at its start, drift in ms/s and the resulting `atempo`. Above it, `Mux by hand:` gives the delay to enter in MKVToolNix when the plan is a single line with no drift (or says why a static delay cannot work) |
 | **Export corrected audio** | writes the `.mka`, then measures it again and prints the residual offset in the log |
 | **Line under the files** | detected framerates and the `atempo` they imply |
 
@@ -53,9 +56,9 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 Two builds sit side by side, same engine, same results:
 
-- `AudioDesyncFinder-Qt.pyw` - **3.0.18**, Qt/Fluent interface with Mica (needs PySide6,
+- `AudioDesyncFinder-Qt.pyw` - **3.0.29**, Qt/Fluent interface with Mica (needs PySide6,
   which installs itself)
-- `AudioDesyncFinder-Tk.pyw` - **2.0.18**, Tk interface (needs only numpy, scipy,
+- `AudioDesyncFinder-Tk.pyw` - **2.0.29**, Tk interface (needs only numpy, scipy,
   matplotlib and FFmpeg)
 
 **The only difference is the UI.** Scanning, the offset model, drift and jump

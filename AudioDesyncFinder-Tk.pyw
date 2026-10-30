@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.28"
+APP_VERSION = "2.0.29"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -2957,6 +2957,75 @@ def plan_lines(plan) -> list:
     return lines
 
 
+def mux_delay_ms(plan):
+    """
+    Delay a muxer needs to fix *plan* by hand, or None when nothing can.
+
+    A constant delay only repairs a constant offset, so the plan has to be one
+    straight line: one segment, no drift, no edit points.  The sign is flipped
+    on purpose - the model stores an offset (positive = the target runs late),
+    a muxer takes a delay (positive = push the audio later).
+    """
+    plan = plan or {}
+    segments = plan.get("segments") or []
+    if len(segments) != 1 or plan.get("jumps"):
+        return None
+    if abs(float(segments[0]["slope"])) >= 0.05:
+        return None
+    return -float(plan.get("initial_offset", segments[0]["offset"]))
+
+
+def mux_hint(plan) -> str:
+    """
+    One line telling the user what to type into a muxer instead of exporting.
+
+    Muxing the untouched audio is lossless and beats the exported .mka, so the
+    number is offered whenever it is valid - and replaced by the reason it is
+    not when the plan needs atempo or edits.
+    """
+    plan = plan or {}
+    segments = plan.get("segments") or []
+    if not segments:
+        return ""
+
+    delay = mux_delay_ms(plan)
+    if delay is None:
+        blockers = []
+        drift = float(segments[0]["slope"])
+        if abs(drift) >= 0.05:
+            blockers.append(f"drift {drift:+.2f} ms/s")
+        jumps = plan.get("jumps") or []
+        if jumps:
+            blockers.append(f"{len(jumps)} edit point{'s' if len(jumps) > 1 else ''}")
+        if not blockers:
+            blockers.append("no straight line")
+        return ("Mux by hand: no single delay can fix this ("
+                + ", ".join(blockers) + ") - export the corrected audio.")
+
+    if abs(delay) < 0.5:
+        return "Mux by hand: already in sync - delay 0 ms."
+    action = "delay the audio" if delay > 0 else "advance the audio"
+    return (f"Mux by hand: delay {delay:+.0f} ms ({action}) - type it into "
+            "MKVToolNix 'Delay (in ms)' on the corrected track.")
+
+
+def plan_report_lines(plan) -> list:
+    """
+    What a finished scan writes to the log: the head of the model, then the
+    manual-mux advice.
+
+    Shared verbatim by both builds so the two logs cannot drift apart - only
+    the panel around them differs.
+    """
+    if not (plan or {}).get("segments"):
+        return []
+    lines = ["    " + line for line in plan_lines(plan)[:5]]
+    hint = mux_hint(plan)
+    if hint:
+        lines.append("    " + hint)
+    return lines
+
+
 def mka_path(path: str) -> str:
     """Force a Matroska Audio extension – the only container this tool writes.
 
@@ -3410,6 +3479,12 @@ class TimelinePanel:
                  font=("Segoe UI", 8), justify=tk.LEFT, anchor=tk.W).pack(
             fill=tk.X, padx=10, pady=(0, 8))
 
+        self.mux_var = tk.StringVar(value="")
+        self.mux_lbl = tk.Label(seg_box, textvariable=self.mux_var, bg=BG_PANEL,
+                                fg=FG_ACCENT, font=("Segoe UI", 9, "bold"),
+                                justify=tk.LEFT, anchor=tk.W, wraplength=960)
+        self.mux_lbl.pack(fill=tk.X, padx=10, pady=(0, 8))
+
         # ---- footer ------------------------------------------------------
         footer = tk.Frame(win, bg=BG_DARK)
         footer.pack(fill=tk.X, padx=14, pady=(10, 12))
@@ -3718,8 +3793,8 @@ class TimelinePanel:
                                   min_conf=self._conf(), slope_hint=hint)
 
         used_env = sum(1 for p in points if p.get("mode") == "e")
-        for line in plan_lines(plan)[:5]:
-            console_log("    " + line, "ok")
+        for line in plan_report_lines(plan):
+            console_log(line, "ok")
         self._post("plan", plan)
         self._post("status",
                    f"Scan finished – {len(points)} points "
@@ -3958,6 +4033,9 @@ class TimelinePanel:
 
         lines = plan_lines(plan) if plan.get("segments") else []
         self.summary_var.set("\n".join(lines[:9]))
+        self.mux_var.set(mux_hint(plan))
+        self.mux_lbl.config(
+            fg=FG_ACCENT if mux_delay_ms(plan) is not None else "#e0a040")
         self.btn_export.config(
             state=tk.NORMAL if (plan.get("segments") and
                                 not (self.worker and self.worker.is_alive()))

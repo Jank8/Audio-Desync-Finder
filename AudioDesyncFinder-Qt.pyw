@@ -1048,6 +1048,75 @@ def plan_lines(plan) -> list:
     return lines
 
 
+def mux_delay_ms(plan):
+    """
+    Delay a muxer needs to fix *plan* by hand, or None when nothing can.
+
+    A constant delay only repairs a constant offset, so the plan has to be one
+    straight line: one segment, no drift, no edit points.  The sign is flipped
+    on purpose - the model stores an offset (positive = the target runs late),
+    a muxer takes a delay (positive = push the audio later).
+    """
+    plan = plan or {}
+    segments = plan.get("segments") or []
+    if len(segments) != 1 or plan.get("jumps"):
+        return None
+    if abs(float(segments[0]["slope"])) >= 0.05:
+        return None
+    return -float(plan.get("initial_offset", segments[0]["offset"]))
+
+
+def mux_hint(plan) -> str:
+    """
+    One line telling the user what to type into a muxer instead of exporting.
+
+    Muxing the untouched audio is lossless and beats the exported .mka, so the
+    number is offered whenever it is valid - and replaced by the reason it is
+    not when the plan needs atempo or edits.
+    """
+    plan = plan or {}
+    segments = plan.get("segments") or []
+    if not segments:
+        return ""
+
+    delay = mux_delay_ms(plan)
+    if delay is None:
+        blockers = []
+        drift = float(segments[0]["slope"])
+        if abs(drift) >= 0.05:
+            blockers.append(f"drift {drift:+.2f} ms/s")
+        jumps = plan.get("jumps") or []
+        if jumps:
+            blockers.append(f"{len(jumps)} edit point{'s' if len(jumps) > 1 else ''}")
+        if not blockers:
+            blockers.append("no straight line")
+        return ("Mux by hand: no single delay can fix this ("
+                + ", ".join(blockers) + ") - export the corrected audio.")
+
+    if abs(delay) < 0.5:
+        return "Mux by hand: already in sync - delay 0 ms."
+    action = "delay the audio" if delay > 0 else "advance the audio"
+    return (f"Mux by hand: delay {delay:+.0f} ms ({action}) - type it into "
+            "MKVToolNix 'Delay (in ms)' on the corrected track.")
+
+
+def plan_report_lines(plan) -> list:
+    """
+    What a finished scan writes to the log: the head of the model, then the
+    manual-mux advice.
+
+    Shared verbatim by both builds so the two logs cannot drift apart - only
+    the panel around them differs.
+    """
+    if not (plan or {}).get("segments"):
+        return []
+    lines = ["    " + line for line in plan_lines(plan)[:5]]
+    hint = mux_hint(plan)
+    if hint:
+        lines.append("    " + hint)
+    return lines
+
+
 def mka_path(path: str) -> str:
     """Force a Matroska Audio extension – the only container this tool writes.
 
@@ -1270,7 +1339,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.28"
+APP_VERSION = "3.0.29"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1562,6 +1631,9 @@ class MainWindow(FluentWindow):
         ml.addWidget(StrongBodyLabel("Fitted model"))
         self.summary = StrongBodyLabel("")
         ml.addWidget(self.summary)
+        self.mux_label = BodyLabel("")
+        self.mux_label.setWordWrap(True)
+        ml.addWidget(self.mux_label)
         self.model_view = TextEdit()
         self.model_view.setReadOnly(True)
         self.model_view.setStyleSheet(
@@ -1747,6 +1819,8 @@ class MainWindow(FluentWindow):
                                      slope_hint=hint)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
+            for line in plan_report_lines(plan):
+                self.ui_queue.put(("log", line))
         except Exception as exc:
             self.ui_queue.put(("log", f"✗ {exc}"))
         finally:
@@ -1855,6 +1929,7 @@ class MainWindow(FluentWindow):
         segments = (self.plan or {}).get("segments") or []
         if not segments:
             self.summary.setText("")
+            self.mux_label.setText("")
             return
         first = segments[0]
         if len(segments) == 1:
@@ -1870,6 +1945,18 @@ class MainWindow(FluentWindow):
         self.summary.setText(text)
         self.summary.setStyleSheet(
             f"color: {self.accent}; font: 600 11pt 'Segoe UI';")
+        self._update_mux_hint()
+
+    def _update_mux_hint(self) -> None:
+        """Manual-mux advice under the headline: the delay, or why there is none."""
+        plan = self.plan or {}
+        self.mux_label.setText(mux_hint(plan))
+        if mux_delay_ms(plan) is not None:
+            colour = self.accent
+        else:
+            colour = "#b05a00" if LIGHT else "#f0a040"     # same amber as the chart
+        self.mux_label.setStyleSheet(
+            f"color: {colour}; font: 600 9pt 'Segoe UI';")
 
     def apply_palette(self) -> None:
         """Recompute the chart/text colours for the current theme."""

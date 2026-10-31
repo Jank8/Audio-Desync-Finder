@@ -74,7 +74,8 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.30"
+APP_VERSION = "2.0.31"
+REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
 # ---------------------------------------------------------------------------
@@ -4295,6 +4296,17 @@ progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 version_label = tk.Label(_status_row, text=APP_VERSION, bg="#111111",
                          fg=fg_accent, font=("Segoe UI", 8, "bold"), anchor=tk.E)
 version_label.pack(side=tk.RIGHT, padx=(10, 12))
+
+
+def _open_repo(event=None):
+    import webbrowser
+    webbrowser.open_new_tab(REPO_URL)
+
+
+version_label.configure(cursor="hand2")
+version_label.bind("<Button-1>", _open_repo)
+version_label.bind("<Enter>", lambda e: version_label.configure(fg="#ffffff"))
+version_label.bind("<Leave>", lambda e: version_label.configure(fg=fg_accent))
 
 # Dark-themed progress bar via ttk.Style
 _pb_style = ttk.Style(root)

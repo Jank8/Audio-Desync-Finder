@@ -1347,7 +1347,8 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.30"
+APP_VERSION = "3.0.31"
+REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
 ACCENT = "#4cc2ff"
@@ -1527,9 +1528,13 @@ class MainWindow(FluentWindow):
         self.chart_spine = "#c9ccd1" if LIGHT else "#3a3f45"
         self.log_fg = "#39404a" if LIGHT else "#9aa4ae"
         try:
-            version = QLabel(APP_VERSION)
-            version.setStyleSheet(
-                f"color: {self.accent}; font: 600 9pt 'Segoe UI';")
+            version = QLabel(
+                f'<a href="{REPO_URL}" style="color:{self.accent};'
+                f'text-decoration:none;">{APP_VERSION}</a>')
+            version.setOpenExternalLinks(True)
+            version.setToolTip("Open the repository")
+            version.setCursor(Qt.PointingHandCursor)
+            version.setStyleSheet("font: 600 9pt 'Segoe UI';")
             version.setContentsMargins(0, 0, 12, 0)
             bar = self.titleBar.hBoxLayout
             bar.insertWidget(max(0, bar.count() - 1), version)

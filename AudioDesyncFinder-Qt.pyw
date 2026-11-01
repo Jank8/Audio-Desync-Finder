@@ -119,6 +119,7 @@ from matplotlib.figure import Figure
 Extracted from audiosync3.pyw so the Tk UI and the Qt UI can share it.
 Pure numpy/scipy + ffmpeg, no GUI code.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -544,14 +545,7 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
     if progress:
         progress(f"Target: {len(tgt) / float(SCAN_SR):.0f} s of audio in "
                  f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
-    sr = SCAN_SR
-    meta = {
-        "sr": sr,
-        "ref_duration": len(ref) / float(sr),
-        "target_duration": len(tgt) / float(sr),
-        "duration": min(len(ref), len(tgt)) / float(sr),
-    }
-    return ref, tgt, meta
+    return ref, tgt, pair_meta(ref, tgt)
 
 
 def decode_key(ref_path: str, tgt_path: str):
@@ -575,6 +569,100 @@ def decode_key(ref_path: str, tgt_path: str):
 def pair_fits_cache(ref, tgt, hours: float = 8.0) -> bool:
     """Keep a decoded pair in memory only while it is reasonably small."""
     return (len(ref) + len(tgt)) <= hours * 3600.0 * SCAN_SR
+
+
+# Decoded audio outlives the process: two raw 16 kHz tracks on disk, so the
+# next session does not go back to the remux.  Reading 700 MB sequentially
+# beats decoding a 60 GB file by an order of magnitude.
+CACHE_LIMIT_BYTES = 2 * 1024 ** 3        # 2 GB of decoded audio
+CACHE_KEEP_FILES = 2                     # one pair: reference and target
+
+
+def _cache_dir() -> str:
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return os.path.join(base, "AudioDesyncFinder", "cache")
+
+
+def _cache_file(key, role: str) -> str:
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_cache_dir(), f"{role}-{digest}.pcm")
+
+
+def pair_meta(ref, tgt) -> dict:
+    """Durations of a decoded pair, shared by the decoder and a cache hit."""
+    sr = SCAN_SR
+    return {
+        "sr": sr,
+        "ref_duration": len(ref) / float(sr),
+        "target_duration": len(tgt) / float(sr),
+        "duration": min(len(ref), len(tgt)) / float(sr),
+    }
+
+
+def load_cached_pair(key):
+    """The pair an earlier session decoded, or None."""
+    if key is None:
+        return None
+    ref_file, tgt_file = _cache_file(key, "ref"), _cache_file(key, "tgt")
+    try:
+        if not (os.path.isfile(ref_file) and os.path.isfile(tgt_file)):
+            return None
+        ref = np.fromfile(ref_file, dtype=np.int16)
+        tgt = np.fromfile(tgt_file, dtype=np.int16)
+    except OSError:
+        return None
+    if len(ref) < SCAN_SR or len(tgt) < SCAN_SR:
+        return None
+    now = time.time()
+    for path in (ref_file, tgt_file):
+        try:
+            os.utime(path, (now, now))   # the pruner keeps what was used last
+        except OSError:
+            pass
+    return ref, tgt
+
+
+def save_cached_pair(key, ref, tgt) -> None:
+    """Write both tracks for the next session and keep the cache under its cap."""
+    if key is None or (len(ref) + len(tgt)) * 2 > CACHE_LIMIT_BYTES:
+        return
+    try:
+        os.makedirs(_cache_dir(), exist_ok=True)
+        for role, data in (("ref", ref), ("tgt", tgt)):
+            path = _cache_file(key, role)
+            temp = path + ".tmp"
+            data.tofile(temp)
+            os.replace(temp, path)
+    except OSError:
+        return
+    _prune_cache()
+
+
+def _prune_cache() -> None:
+    """Keep one pair: at most CACHE_KEEP_FILES files, under the byte limit."""
+    try:
+        entries = []
+        for name in os.listdir(_cache_dir()):
+            if not name.endswith(".pcm"):
+                continue
+            path = os.path.join(_cache_dir(), name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            entries.append((stat.st_mtime, stat.st_size, path))
+    except OSError:
+        return
+    entries.sort()                       # oldest first
+    total = sum(entry[1] for entry in entries)
+    while entries and (len(entries) > CACHE_KEEP_FILES
+                       or total > CACHE_LIMIT_BYTES):
+        _, size, path = entries.pop(0)
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
 
 
 def _correlate_peak(x, y, hop_s: float, guard_s: float = 0.060):
@@ -629,6 +717,9 @@ def _envelope_of(seg, sr: int, hop_s: float = ENVELOPE_HOP_S,
     if len(seg) < win + hop:
         return np.zeros(0)
 
+    # square in floating point: int16 would overflow and turn the envelope
+    # into NaN, which silently disabled the coarse alignment
+    seg = np.asarray(seg, dtype=np.float64)
     squares = np.concatenate(([0.0], np.cumsum(seg * seg)))
     starts = np.arange(0, len(seg) - win, hop)
     env = np.sqrt((squares[starts + win] - squares[starts]) / float(win))
@@ -1604,7 +1695,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.55"
+APP_VERSION = "3.0.56"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2098,20 +2189,29 @@ class MainWindow(FluentWindow):
                 self.ui_queue.put(("progress", (68, "Using the cached audio…")))
             else:
                 self.decoded = {}          # free the old pair before the new one lands
-                ref, tgt, meta = decode_pair(
-                    ref_path, tgt_path,
-                    progress=lambda m: self.ui_queue.put(("log", m)),
-                    on_fraction=lambda phase, f: self.ui_queue.put(
-                        ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                      f"Decoding {phase}… {f * 100:.3f}% · "
-                                      f"{time.time() - scan_t0:.0f} s"))),
-                    should_stop=self.stop_event.is_set,
-                    workers=int(self._num(self.entry_cores, _decode_workers())))
+                stored = load_cached_pair(key)
+                if stored is not None:
+                    ref, tgt = stored
+                    meta = pair_meta(ref, tgt)
+                    self.ui_queue.put(("log", "Loaded the audio decoded by an earlier "
+                                              "session from the cache."))
+                    self.ui_queue.put(("progress", (68, "Loading the cached audio…")))
+                else:
+                    ref, tgt, meta = decode_pair(
+                        ref_path, tgt_path,
+                        progress=lambda m: self.ui_queue.put(("log", m)),
+                        on_fraction=lambda phase, f: self.ui_queue.put(
+                            ("progress", (5 + (30 if phase == "ref" else 32) * f,
+                                          f"Decoding {phase}… {f * 100:.3f}% · "
+                                          f"{time.time() - scan_t0:.0f} s"))),
+                        should_stop=self.stop_event.is_set,
+                        workers=int(self._num(self.entry_cores, _decode_workers())))
+                    if not self.stop_event.is_set():
+                        self.ui_queue.put(("progress", (68, "Saving the decoded audio…")))
+                        save_cached_pair(key, ref, tgt)
                 if key is not None and pair_fits_cache(ref, tgt):
                     self.decoded = {"key": key, "ref": ref, "tgt": tgt,
                                     "meta": meta}
-                else:
-                    self.decoded = {}
             if self.stop_event.is_set():
                 self.ui_queue.put(("log", "Stopped by the user."))
                 return

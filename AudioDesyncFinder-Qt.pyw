@@ -1173,6 +1173,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         warnings.append(
             f"Last measurement is at {usable[-1]['t']:.0f}s – the final "
             f"{duration - usable[-1]['t']:.0f}s is not covered.")
+    used_points = sum(int(seg["n"]) for seg in segments)
+    if len(segments) > 3 and used_points < 6 * len(segments):
+        warnings.append(
+            f"{len(segments)} segments for {used_points} points – the measurements "
+            "are probably noisy; raise Min confidence or delete the outliers.")
 
     return {
         "segments": segments,
@@ -1255,6 +1260,26 @@ def mux_hint(plan) -> str:
     action = "delay the audio" if delay > 0 else "advance the audio"
     return (f"Mux by hand: delay {delay:+.0f} ms ({action}) - type it into "
             "MKVToolNix 'Delay (in ms)' on the corrected track.")
+
+
+def chart_ylim(points, minimum_span: float = 60.0):
+    """
+    Y range for the offset chart that a few wild measurements cannot stretch.
+
+    The plot used to autoscale to whatever the worst correlation produced - one
+    point at +/-20 s flattened the whole cloud and made a normal offset look
+    like a straight line at zero.  The range comes from the 5th..95th
+    percentile of the measured offsets instead, so the points that matter fill
+    the chart and the junk is clipped away.
+    """
+    values = np.asarray([float(p["offset"]) for p in points], dtype=float)
+    if values.size == 0:
+        return None
+    lo, hi = (float(v) for v in np.percentile(values, [5.0, 95.0]))
+    span = max(float(minimum_span), hi - lo)
+    mid = 0.5 * (lo + hi)
+    pad = max(20.0, span * 0.18)
+    return mid - span / 2.0 - pad, mid + span / 2.0 + pad
 
 
 def plan_report_lines(plan) -> list:
@@ -1496,7 +1521,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.47"
+APP_VERSION = "3.0.48"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2306,6 +2331,9 @@ class MainWindow(FluentWindow):
             ax.plot([x0, x1], [y0, y0 + seg["slope"] * (x1 - x0)],
                     color="#3ddc97", lw=1.6)
         ax.axhline(0, color=self.chart_spine, lw=0.7, ls=":")
+        limits = chart_ylim(self.points) if self.points else None
+        if limits:
+            ax.set_ylim(*limits)
         ax.tick_params(colors=self.chart_fg, labelsize=7)
         for spine in ax.spines.values():
             spine.set_color(self.chart_spine)

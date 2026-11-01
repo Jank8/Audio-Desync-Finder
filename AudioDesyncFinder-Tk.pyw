@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.36"
+APP_VERSION = "2.0.37"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2212,6 +2212,69 @@ def _envelope_sos(sr: int = SCAN_SR):
     return sos
 
 
+def _decode_workers() -> int:
+    """All cores but two, so the desktop stays usable while decoding."""
+    return max(1, (os.cpu_count() or 4) - 2)
+
+
+def _decode_parallel(path: str, sr: int, total: float, workers: int,
+                     on_fraction=None, should_stop=None):
+    """
+    Decode the track in *workers* slices at once and concatenate the PCM.
+
+    FFmpeg decodes a single stream on one core, so splitting the timeline is the
+    only way to use the machine.  Each slice is decoded with half a second of
+    overlap and trimmed to the exact sample count, so the joins are seamless.
+    """
+    import concurrent.futures as futures
+
+    chunk = total / workers
+    parts = [None] * workers
+
+    def run(index: int) -> None:
+        start = index * chunk
+        length = chunk + (0.5 if index < workers - 1 else 0.0)
+        cmd = ["ffmpeg", "-v", "error", "-nostdin",
+               "-ss", f"{start:.3f}", "-i", path, "-t", f"{length:.3f}",
+               "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(sr),
+               "-f", "s16le", "-"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL,
+                                startupinfo=get_startupinfo())
+        _ffmpeg_procs.append(proc)
+        try:
+            data = proc.stdout.read()
+        finally:
+            proc.wait()
+            try:
+                _ffmpeg_procs.remove(proc)
+            except ValueError:
+                pass
+        piece = np.frombuffer(data, dtype=np.int16)
+        if index < workers - 1:
+            piece = piece[:int(round(chunk * sr))]
+        parts[index] = piece
+        if on_fraction:
+            done = sum(1 for p in parts if p is not None)
+            on_fraction(min(1.0, done / workers))
+
+    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = [pool.submit(run, i) for i in range(workers)]
+        for fut in futures.as_completed(pending):
+            if should_stop is not None and should_stop():
+                for proc in list(_ffmpeg_procs):
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                raise RuntimeError("Cancelled by the user")
+            fut.result()
+
+    usable = [p for p in parts if p is not None and len(p)]
+    return np.concatenate(usable) if usable else np.zeros(0, dtype=np.int16)
+
+
 def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     """
     Decode the first audio stream of *path* to mono 16-bit PCM at *sr*.
@@ -2224,6 +2287,12 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     """
     out = os.path.join(tempfile.gettempdir(), f"ads_scan_{tag}_{os.getpid()}.wav")
     total = _get_file_duration(path) or 0.0
+
+    workers = _decode_workers()
+    if total >= 180 and workers > 1:
+        data = _decode_parallel(path, sr, total, workers, on_fraction, should_stop)
+        if len(data):
+            return sr, np.ascontiguousarray(data.astype(np.int16, copy=False))
     cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
            "-i", path, "-vn", "-map", "0:a:0",
            "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", out]

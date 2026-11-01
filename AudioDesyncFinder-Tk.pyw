@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.49"
+APP_VERSION = "2.0.50"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3867,9 +3867,10 @@ class TimelinePanel:
         """Live progress while either file is being decoded."""
         base, span = (3.0, 35.0) if phase == "ref" else (38.0, 32.0)
         name = "reference" if phase == "ref" else "target"
+        elapsed = time.time() - getattr(self, "_scan_t0", time.time())
         self._post("progress",
                    (base + span * fraction,
-                    f"Decoding {name}… {fraction * 100:.0f}%"))
+                    f"Decoding {name}… {fraction * 100:.0f}% · {elapsed:.0f} s"))
 
 
     def _run_scan(self, ref, tgt, rate, meta, window, step, mode, hint,
@@ -3900,6 +3901,7 @@ class TimelinePanel:
     def _task_scan(self) -> None:
         console_log("── Timeline scan started ─────────────────────", "bold")
         self._post("status", "Decoding audio…")
+        self._scan_t0 = time.time()
         ref, tgt, meta = decode_pair(
             self.ref_path, self.target_path,
             progress=lambda msg: self._post("status", msg),

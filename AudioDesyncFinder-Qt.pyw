@@ -1532,7 +1532,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.49"
+APP_VERSION = "3.0.50"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2014,12 +2014,14 @@ class MainWindow(FluentWindow):
         try:
             ref_path, tgt_path = self._ordered_paths()
             self.ui_queue.put(("log", "── Scan started ─────────────"))
+            scan_t0 = time.time()
             ref, tgt, meta = decode_pair(
                 ref_path, tgt_path,
                 progress=lambda m: self.ui_queue.put(("log", m)),
                 on_fraction=lambda phase, f: self.ui_queue.put(
                     ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                  f"Decoding {phase}… {f * 100:.0f}%"))),
+                                  f"Decoding {phase}… {f * 100:.0f}% · "
+                                  f"{time.time() - scan_t0:.0f} s"))),
                 should_stop=self.stop_event.is_set,
                 workers=int(self._num(self.entry_cores, _decode_workers())))
             if self.stop_event.is_set():
@@ -2027,9 +2029,20 @@ class MainWindow(FluentWindow):
                 return
             self.meta = meta
 
+            mode = ("auto" if self.combo_signal.currentIndex() == 0
+                    else "waveform" if self.combo_signal.currentIndex() == 1
+                    else "envelope")
+            step = self._num(self.entry_step, 30)
             hint = self._fps_hint()
             rate = 1.0 + hint / 1000.0 if hint and abs(hint) >= 0.3 else 1.0
-            scan_tgt = resample_track(tgt, rate) if rate != 1.0 else tgt
+            if rate != 1.0:
+                self.ui_queue.put(("progress", (
+                    68, f"Framerate hint {hint:+.3f} ms/s - pre-warping the target…")))
+                scan_tgt = resample_track(tgt, rate)
+            else:
+                self.ui_queue.put(("progress", (
+                    68, f"Measuring every {step:.0f}s ({mode})…")))
+                scan_tgt = tgt
             coarse = 0.0
             try:
                 coarse = coarse_offset(ref, scan_tgt)
@@ -2043,10 +2056,7 @@ class MainWindow(FluentWindow):
                 coarse = 0.0
             points = scan_arrays(
                 ref, scan_tgt, window=self._num(self.entry_window, 40),
-                step=self._num(self.entry_step, 30),
-                mode=("auto" if self.combo_signal.currentIndex() == 0
-                      else "waveform" if self.combo_signal.currentIndex() == 1
-                      else "envelope"),
+                step=step, mode=mode,
                 progress=lambda done, total: self.ui_queue.put(
                     ("progress", (72 + 27 * done / max(total, 1),
                                   f"Measuring {done}/{total}"))),

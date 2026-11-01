@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.44"
+APP_VERSION = "2.0.45"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2225,6 +2225,10 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
     FFmpeg decodes a single stream on one core, so splitting the timeline is the
     only way to use the machine.  Each slice is decoded with half a second of
     overlap and trimmed to the exact sample count, so the joins are seamless.
+
+    Every slice follows its own FFmpeg position (-progress on stderr, stdout
+    carries the PCM): equal slices started together all finish at the same
+    moment, so counting finished slices left the bar frozen until the very end.
     """
     # Python 3.15 turns concurrent.futures.ThreadPoolExecutor into a lazy-import
     # proxy that can stay unresolved inside this process (calling it raises
@@ -2235,34 +2239,72 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
 
     chunk = total / workers
     parts = [None] * workers
+    done = [0.0] * workers          # seconds of audio decoded inside each slice
+    lock = threading.Lock()
+    reported = [0.0]
+
+    def report(force: bool = False) -> None:
+        """Overall fraction from the slice positions, throttled to 0.5 %."""
+        if on_fraction is None:
+            return
+        with lock:
+            frac = min(1.0, sum(done) / total) if total > 0 else 0.0
+            if not force and frac - reported[0] < 0.005:
+                return
+            reported[0] = frac
+        on_fraction(frac)
 
     def run(index: int) -> None:
         start = index * chunk
         length = chunk + (0.5 if index < workers - 1 else 0.0)
-        cmd = ["ffmpeg", "-v", "error", "-nostdin",
+        cmd = ["ffmpeg", "-v", "error", "-nostdin", "-nostats",
+               "-progress", "pipe:2",
                "-ss", f"{start:.3f}", "-i", path, "-t", f"{length:.3f}",
                "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(sr),
                "-f", "s16le", "-"]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE,
                                 stdin=subprocess.DEVNULL,
                                 startupinfo=get_startupinfo())
         _ffmpeg_procs.append(proc)
+
+        def follow() -> None:
+            """Keep this slice's position in *done* while it decodes."""
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("out_time_us="):
+                    continue
+                try:
+                    seconds = int(line.split("=", 1)[1]) / 1_000_000.0
+                except ValueError:
+                    continue
+                with lock:
+                    done[index] = max(done[index], min(seconds, length))
+                report()
+
+        follower = threading.Thread(target=follow, daemon=True)
+        follower.start()
         try:
             data = proc.stdout.read()
         finally:
             proc.wait()
+            follower.join(timeout=10.0)
             try:
                 _ffmpeg_procs.remove(proc)
             except ValueError:
+                pass
+            try:
+                proc.stdout.close()
+                proc.stderr.close()
+            except OSError:
                 pass
         piece = np.frombuffer(data, dtype=np.int16)
         if index < workers - 1:
             piece = piece[:int(round(chunk * sr))]
         parts[index] = piece
-        if on_fraction:
-            done = sum(1 for p in parts if p is not None)
-            on_fraction(min(1.0, done / workers))
+        with lock:
+            done[index] = length
+        report(force=True)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         pending = [pool.submit(run, i) for i in range(workers)]

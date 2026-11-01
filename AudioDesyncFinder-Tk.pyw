@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.56"
+APP_VERSION = "2.0.57"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2554,6 +2554,32 @@ def save_cached_pair(key, ref, tgt) -> None:
     _prune_cache()
 
 
+def clear_decoded_cache():
+    """
+    Delete every cached decoded track, keeping the folder itself.
+
+    Returns (bytes freed, files removed) so the caller can report what happened.
+    """
+    freed = 0
+    removed = 0
+    try:
+        names = os.listdir(_cache_dir())
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.endswith((".pcm", ".tmp")):
+            continue
+        path = os.path.join(_cache_dir(), name)
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+        except OSError:
+            continue
+        freed += size
+        removed += 1
+    return freed, removed
+
+
 def _prune_cache() -> None:
     """Keep one pair: at most CACHE_KEEP_FILES files, under the byte limit."""
     try:
@@ -3866,6 +3892,7 @@ class TimelinePanel:
         for label, cmd in (("Save plan…", self.save_plan),
                            ("Load plan…", self.load_plan),
                            ("Clear all", self.clear_all),
+                           ("Clear cache", self.clear_cache),
                            ("Close", self.close)):
             tk.Button(footer, text=label, command=cmd, bg="#333333",
                       fg="#ffffff", relief=tk.FLAT, font=("Segoe UI", 9),
@@ -4327,6 +4354,17 @@ class TimelinePanel:
         self._refresh_plan()
         self._draw()
         self.status_var.set("Cleared.")
+
+    def clear_cache(self) -> None:
+        """Throw away the decoded audio kept between sessions."""
+        freed, removed = clear_decoded_cache()
+        self._decoded_key = None
+        self.ref_data = self.tgt_data = None
+        if removed:
+            console_log(f"Cache cleared: {removed} file(s), {freed / 1e6:.0f} MB freed.",
+                        "ok")
+        else:
+            console_log("Cache is already empty.", "info")
 
     def _rebuild_plan(self) -> None:
         if self.meta is None:

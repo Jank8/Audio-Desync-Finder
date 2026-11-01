@@ -45,6 +45,7 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 | **Signal** | `Auto` tries the waveform first and falls back to the envelope; `Waveform` for same-language sources and music; `Envelope` for two different dubs |
 | **Auto-scan whole file** | runs the scan; progress goes to the bar, messages to the log |
 | **Stop** | stops a running scan or export |
+| **Clear cache** | deletes the decoded audio kept in `%LOCALAPPDATA%\AudioDesyncFinder\cache`; the next scan decodes the files again |
 | **Chart** | offset over time: dots are measurements, the green line is the fitted model |
 | **Table** | every measurement with time, offset, confidence and source (`wave` / `env`) |
 | **Delete selected point** | drops a bad measurement and re-fits the model at once |
@@ -56,9 +57,9 @@ matplotlib install themselves on first launch; FFmpeg is offered via winget.
 
 Two builds sit side by side, same engine, same results:
 
-- `AudioDesyncFinder-Qt.pyw` - **3.0.56**, Qt/Fluent interface with Mica (needs PySide6,
+- `AudioDesyncFinder-Qt.pyw` - **3.0.57**, Qt/Fluent interface with Mica (needs PySide6,
   which installs itself)
-- `AudioDesyncFinder-Tk.pyw` - **2.0.56**, Tk interface (needs only numpy, scipy,
+- `AudioDesyncFinder-Tk.pyw` - **2.0.57**, Tk interface (needs only numpy, scipy,
   matplotlib and FFmpeg)
 
 **The only difference is the UI.** Scanning, the offset model, drift and jump

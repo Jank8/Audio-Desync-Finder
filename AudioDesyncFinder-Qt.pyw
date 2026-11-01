@@ -638,6 +638,32 @@ def save_cached_pair(key, ref, tgt) -> None:
     _prune_cache()
 
 
+def clear_decoded_cache():
+    """
+    Delete every cached decoded track, keeping the folder itself.
+
+    Returns (bytes freed, files removed) so the caller can report what happened.
+    """
+    freed = 0
+    removed = 0
+    try:
+        names = os.listdir(_cache_dir())
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.endswith((".pcm", ".tmp")):
+            continue
+        path = os.path.join(_cache_dir(), name)
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+        except OSError:
+            continue
+        freed += size
+        removed += 1
+    return freed, removed
+
+
 def _prune_cache() -> None:
     """Keep one pair: at most CACHE_KEEP_FILES files, under the byte limit."""
     try:
@@ -1695,7 +1721,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.56"
+APP_VERSION = "3.0.57"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1995,6 +2021,11 @@ class MainWindow(FluentWindow):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_scan)
         sl.addWidget(self.btn_stop)
+        self.btn_clear_cache = PushButton("Clear cache")
+        self.btn_clear_cache.setToolTip(
+            "Delete the decoded audio kept on disk between sessions")
+        self.btn_clear_cache.clicked.connect(self.clear_cache)
+        sl.addWidget(self.btn_clear_cache)
         outer.addWidget(settings)
 
         # ---------------- chart -----------------------------------------
@@ -2174,6 +2205,15 @@ class MainWindow(FluentWindow):
     def stop_scan(self):
         self.stop_event.set()
         self.status.setText("Stopping…")
+
+    def clear_cache(self):
+        """Throw away the decoded audio kept between sessions."""
+        freed, removed = clear_decoded_cache()
+        self.decoded = {}          # the copy in RAM would hide the clear
+        if removed:
+            self.log(f"Cache cleared: {removed} file(s), {freed / 1e6:.0f} MB freed.")
+        else:
+            self.log("Cache is already empty.")
 
     def _scan_task(self):
         try:

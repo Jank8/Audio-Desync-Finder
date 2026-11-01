@@ -1227,24 +1227,35 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                         "their neighbours.")
         usable = cleaned
 
-    # ---- 0b. and points far outside the offset the file itself reports ----
-    # A correlation can lock onto a totally different peak, and it does so in
-    # bursts: neighbours agree with each other, so the local test above keeps
-    # them.  The whole file has to vote as well.  The band scales with the
-    # spread, so a real drift (wide spread) and a real edit (two plateaus,
-    # wide MAD) stay intact while a burst three seconds away cannot survive.
+    # ---- 0b. judge every point against the file's own trend --------------
+    # A single deviation means nothing on its own: a burst of failed
+    # correlations sits three seconds away while the film's real offset walks
+    # a straight line.  So the trend is fitted first - Theil-Sen on a sample,
+    # which is immune to a minority of junk - and each point is judged by its
+    # distance from that line, not by its neighbours.
     #
-    # A long run far from the median is not a burst: a re-timed recap or a
-    # second master can sit half a second away for twenty minutes, so runs of
-    # FAR_RUN_POINTS consecutive points are kept whatever the band says.  The
-    # filter can therefore only ever remove short bursts.
+    # A long run far from the trend is not a burst: a re-timed recap or a
+    # second master really does sit somewhere else for twenty minutes, so runs
+    # of FAR_RUN_POINTS consecutive points are kept whatever the band says.
+    # The filter can therefore only ever remove short excursions.
     FAR_RUN_POINTS = 20                     # about ten minutes at the usual step
     if len(usable) >= 8:
-        values = np.array([float(p["offset"]) for p in usable])
-        middle = float(np.median(values))
-        spread = float(np.median(np.abs(values - middle)))
-        band = max(500.0, 8.0 * 1.4826 * spread)
-        far = [abs(float(p["offset"]) - middle) > band for p in usable]
+        times = np.array([float(p["t"]) for p in usable])
+        offsets = np.array([float(p["offset"]) for p in usable])
+        sample = np.linspace(0, len(times) - 1,
+                             min(len(times), 400)).astype(int)
+        sample_t, sample_o = times[sample], offsets[sample]
+        left, right = np.triu_indices(len(sample_t), k=1)
+        deltas = sample_t[right] - sample_t[left]
+        usable_pairs = np.abs(deltas) > 1.0
+        slope = float(np.median(
+            (sample_o[right] - sample_o[left])[usable_pairs] / deltas[usable_pairs]))
+        intercept = float(np.median(offsets - slope * times))
+        residual = offsets - (slope * times + intercept)
+        centre = float(np.median(residual))
+        spread = float(np.median(np.abs(residual - centre)))
+        band = max(350.0, 6.0 * 1.4826 * spread)
+        far = [abs(float(value) - centre) > band for value in residual]
         if any(far) and not all(far):
             keep = [not flag for flag in far]
             index = 0
@@ -1262,8 +1273,8 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             inside = [p for p, wanted in zip(usable, keep) if wanted]
             if 3 <= len(inside) < len(usable):
                 warnings.append(
-                    f"Dropped {len(usable) - len(inside)} measurement(s) far "
-                    "outside the offset the rest of the file shows.")
+                    f"Dropped {len(usable) - len(inside)} measurement(s) that do "
+                    f"not follow the file's trend ({slope:+.3f} ms/s).")
                 usable = inside
 
     # ---- 1. robust drift estimate over all consecutive gaps ---------------
@@ -1824,7 +1835,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.61"
+APP_VERSION = "3.0.62"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

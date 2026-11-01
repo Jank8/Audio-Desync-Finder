@@ -101,7 +101,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
+from qfluentwidgets import (BodyLabel, CardWidget, CheckBox, ComboBox, FluentWindow,
                             InfoBar, InfoBarPosition, LineEdit, MessageBox,
                             PrimaryPushButton, ProgressBar, PushButton,
                             RadioButton, SpinBox, StrongBodyLabel, TableWidget,
@@ -1418,7 +1418,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.39"
+APP_VERSION = "3.0.40"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1789,6 +1789,11 @@ class MainWindow(FluentWindow):
         self.btn_export = PrimaryPushButton("⬇  Export corrected audio…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_audio)
+        self.check_verify = CheckBox("Verify & auto align")
+        self.check_verify.setChecked(True)
+        self.check_verify.setToolTip(
+            "Measure the exported file and shift the plan if a few ms are left")
+        footer.addWidget(self.check_verify)
         footer.addWidget(self.btn_export)
         outer.addLayout(footer)
 
@@ -1980,10 +1985,32 @@ class MainWindow(FluentWindow):
                 should_stop=self.stop_event.is_set)
             self.ui_queue.put(("log", f"✓ Saved: {path}"))
             self.ui_queue.put(("notify", (path, True)))
-            residual = measure_residual(self._ordered_paths()[0], path)
-            if residual:
-                for line in format_residual(residual).splitlines():
-                    self.ui_queue.put(("log", line))
+            if self.check_verify.isChecked():
+                ref_path = self._ordered_paths()[0]
+                self.ui_queue.put(("log", "Checking the alignment of the exported file…"))
+                residual = None
+                try:
+                    residual = measure_residual(ref_path, path)
+                except Exception as exc:
+                    self.ui_queue.put(("log", f"Verification skipped: {exc}"))
+                if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
+                    delta = residual[0]
+                    self.ui_queue.put(("log", f"Residual {delta:+.1f} ms - re-exporting aligned…"))
+                    adjusted = shift_plan(self.plan, delta)
+                    export_plan(
+                        adjusted, tgt_path, path,
+                        progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
+                        log=lambda m, tag="info": self.ui_queue.put(("log", m)),
+                        should_stop=self.stop_event.is_set)
+                    self.plan = adjusted
+                    self.ui_queue.put(("plan", adjusted))
+                    try:
+                        residual = measure_residual(ref_path, path)
+                    except Exception:
+                        pass
+                if residual:
+                    for line in format_residual(residual).splitlines():
+                        self.ui_queue.put(("log", line))
         except Exception as exc:
             self.ui_queue.put(("log", f"✗ Export failed: {exc}"))
         finally:

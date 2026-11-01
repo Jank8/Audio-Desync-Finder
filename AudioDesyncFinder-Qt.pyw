@@ -175,9 +175,9 @@ def _run_ffmpeg_progress(cmd, total_s, pct_from, pct_to, report=None, should_sto
                     continue
                 frac = 0.0 if total_s <= 0 else min(1.0, seconds / total_s)
                 pct = pct_from + (pct_to - pct_from) * frac
-                if report is not None and pct - last >= 0.4:
+                if report is not None and pct - last >= 0.01:
                     last = pct
-                    report(pct, f"{pct:.1f}%  -  {time.time() - started:.0f}s")
+                    report(pct, f"{pct:.3f}%  -  {time.time() - started:.0f}s")
             if should_stop is not None and should_stop():
                 cancelled = True
                 proc.kill()
@@ -197,7 +197,7 @@ def _run_ffmpeg_progress(cmd, total_s, pct_from, pct_to, report=None, should_sto
     if rc != 0:
         raise subprocess.CalledProcessError(rc, cmd)
     if report is not None:
-        report(pct_to, f"{pct_to:.1f}%")
+        report(pct_to, f"{pct_to:.3f}%")
     return rc
 
 
@@ -339,7 +339,7 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
             return
         with lock:
             frac = min(1.0, sum(done) / total) if total > 0 else 0.0
-            if not force and frac - reported[0] < 0.001:
+            if not force and frac - reported[0] < 0.0001:
                 return
             reported[0] = frac
         on_fraction(frac)
@@ -1532,7 +1532,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.51"
+APP_VERSION = "3.0.52"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2020,7 +2020,7 @@ class MainWindow(FluentWindow):
                 progress=lambda m: self.ui_queue.put(("log", m)),
                 on_fraction=lambda phase, f: self.ui_queue.put(
                     ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                  f"Decoding {phase}… {f * 100:.1f}% · "
+                                  f"Decoding {phase}… {f * 100:.3f}% · "
                                   f"{time.time() - scan_t0:.0f} s"))),
                 should_stop=self.stop_event.is_set,
                 workers=int(self._num(self.entry_cores, _decode_workers())))

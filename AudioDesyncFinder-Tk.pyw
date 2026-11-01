@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.50"
+APP_VERSION = "2.0.51"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -186,7 +186,7 @@ def _run_ffmpeg_progress(cmd: list, total_s: float, pct_from: float,
                 pct = pct_from + (pct_to - pct_from) * fraction
                 if report is not None and pct - last_reported >= 0.4:
                     last_reported = pct
-                    report(pct, f"{pct:.0f}%  –  {time.time() - started:.0f}s")
+                    report(pct, f"{pct:.1f}%  –  {time.time() - started:.0f}s")
             if should_stop is not None and should_stop():
                 cancelled = True
                 proc.kill()
@@ -208,7 +208,7 @@ def _run_ffmpeg_progress(cmd: list, total_s: float, pct_from: float,
     if rc != 0:
         raise subprocess.CalledProcessError(rc, cmd)
     if report is not None:
-        report(pct_to, f"{pct_to:.0f}%")
+        report(pct_to, f"{pct_to:.1f}%")
     return rc
 
 
@@ -2255,7 +2255,7 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
             return
         with lock:
             frac = min(1.0, sum(done) / total) if total > 0 else 0.0
-            if not force and frac - reported[0] < 0.005:
+            if not force and frac - reported[0] < 0.001:
                 return
             reported[0] = frac
         on_fraction(frac)
@@ -3870,7 +3870,7 @@ class TimelinePanel:
         elapsed = time.time() - getattr(self, "_scan_t0", time.time())
         self._post("progress",
                    (base + span * fraction,
-                    f"Decoding {name}… {fraction * 100:.0f}% · {elapsed:.0f} s"))
+                    f"Decoding {name}… {fraction * 100:.1f}% · {elapsed:.0f} s"))
 
 
     def _run_scan(self, ref, tgt, rate, meta, window, step, mode, hint,

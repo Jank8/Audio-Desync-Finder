@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.48"
+APP_VERSION = "2.0.49"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -829,6 +829,7 @@ def flush_startup_messages() -> None:
 ffmpeg_ready    = False   # True once FFmpeg has been confirmed usable
 _ffmpeg_procs: list = []  # Running media-extraction (ffmpeg) processes
 _install_procs: list = []  # Running winget installers
+_DECODE_MODE   = {"value": "?"}  # what the last _decode_track actually used
 
 # ANSI escape sequences emitted by winget/ffmpeg when colour is forced on
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -2350,7 +2351,8 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
     return np.concatenate(usable) if usable else np.zeros(0, dtype=np.int16)
 
 
-def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
+def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
+                  should_stop=None, workers=None):
     """
     Decode the first audio stream of *path* to mono 16-bit PCM at *sr*.
 
@@ -2367,7 +2369,9 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     if total >= 180 and workers > 1:
         data = _decode_parallel(path, sr, total, workers, on_fraction, should_stop)
         if len(data):
+            _DECODE_MODE["value"] = f"parallel, {workers} slices"
             return sr, np.ascontiguousarray(data.astype(np.int16, copy=False))
+    _DECODE_MODE["value"] = "sequential"
     cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
            "-i", path, "-vn", "-map", "0:a:0",
            "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", out]
@@ -2386,6 +2390,9 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
                     except ValueError:
                         continue
                     on_fraction(max(0.0, min(1.0, seconds / total)))
+                if should_stop is not None and should_stop():
+                    proc.kill()
+                    raise RuntimeError("Cancelled by the user")
             stderr = proc.stderr.read()
         finally:
             try:
@@ -2416,7 +2423,7 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
 
 
 def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None,
-                workers=None):
+                should_stop=None, workers=None):
     """
     Decode both files once and return (ref, target, meta).
 
@@ -2433,10 +2440,20 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
 
     if progress:
         progress("Decoding reference…")
-    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), workers=workers)
+    started = time.time()
+    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), should_stop=should_stop,
+                     workers=workers)
+    if progress:
+        progress(f"Reference: {len(ref) / float(SCAN_SR):.0f} s of audio in "
+                 f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
     if progress:
         progress("Decoding target…")
-    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"))
+    started = time.time()
+    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"), should_stop=should_stop,
+                     workers=workers)
+    if progress:
+        progress(f"Target: {len(tgt) / float(SCAN_SR):.0f} s of audio in "
+                 f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
     sr = SCAN_SR
     meta = {
         "sr": sr,
@@ -3887,6 +3904,7 @@ class TimelinePanel:
             self.ref_path, self.target_path,
             progress=lambda msg: self._post("status", msg),
             on_fraction=self._decode_fraction,
+            should_stop=self.stop_event.is_set,
             workers=int(self._num(self.var_cores, 4, 1, 64)))
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
@@ -3987,7 +4005,8 @@ class TimelinePanel:
             self._post("status", "Decoding audio…")
             self.ref_data, self.tgt_data, self.meta = decode_pair(
                 self.ref_path, self.target_path,
-                progress=lambda msg: self._post("status", msg))
+                progress=lambda msg: self._post("status", msg),
+                should_stop=self.stop_event.is_set)
 
         # keep the point inside the track
         duration = self.plan_duration

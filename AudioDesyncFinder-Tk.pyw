@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.62"
+APP_VERSION = "2.0.63"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2881,7 +2881,11 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
     ts = np.array([p["t"] for p in pts], dtype=float)
     ys = np.array([p["offset"] for p in pts], dtype=float)
 
-    if len(pts) >= 3 and float(ts.max() - ts.min()) > 0.5:
+    span = float(ts.max() - ts.min()) if len(ts) else 0.0
+    # A short group cannot carry its own slope: two points always look
+    # perfectly straight and five noisy ones invent a tempo.  Anything shorter
+    # than ten minutes takes the file's trend and fits only its own level.
+    if len(pts) >= 6 and span > 600.0:
         slopes = []
         for a in range(len(pts)):
             for b in range(a + 1, len(pts)):
@@ -2892,7 +2896,7 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
         intercept = float(np.median(ys - slope * ts))
     else:
         slope = float(fallback_slope)
-        intercept = float(ys[0] - slope * ts[0])
+        intercept = float(np.median(ys - slope * ts))
 
     resid = ys - (slope * ts + intercept)
     for _ in range(5):
@@ -3065,6 +3069,8 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # of FAR_RUN_POINTS consecutive points are kept whatever the band says.
     # The filter can therefore only ever remove short excursions.
     FAR_RUN_POINTS = 20                     # about ten minutes at the usual step
+    trend_slope = None                      # the file's own drift, once fitted
+    trend_mad = None                        # ... and how much its points scatter
     if len(usable) >= 8:
         times = np.array([float(p["t"]) for p in usable])
         offsets = np.array([float(p["offset"]) for p in usable])
@@ -3077,9 +3083,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         slope = float(np.median(
             (sample_o[right] - sample_o[left])[usable_pairs] / deltas[usable_pairs]))
         intercept = float(np.median(offsets - slope * times))
+        trend_slope = slope
         residual = offsets - (slope * times + intercept)
         centre = float(np.median(residual))
         spread = float(np.median(np.abs(residual - centre)))
+        trend_mad = spread
         band = max(350.0, 6.0 * 1.4826 * spread)
         far = [abs(float(value) - centre) > band for value in residual]
         if any(far) and not all(far):
@@ -3103,27 +3111,44 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                     f"not follow the file's trend ({slope:+.3f} ms/s).")
                 usable = inside
 
-    # ---- 1. robust drift estimate over all consecutive gaps ---------------
-    gap_slopes = []
-    for p, q in zip(usable, usable[1:]):
-        dt = float(q["t"]) - float(p["t"])
-        if dt > 0.5:
-            gap_slopes.append((float(q["offset"]) - float(p["offset"])) / dt)
-    base_slope = float(np.median(gap_slopes)) if gap_slopes else 0.0
-    if abs(base_slope) > 25.0:
-        explained = (slope_hint is not None
-                     and abs(base_slope - slope_hint) <= max(2.0, abs(slope_hint) * 0.2))
-        if not explained:
-            # 25 ms/s is 2.5 % tempo – a real drift never gets that far.
-            warnings.append("Global slope is implausible for drift (>25 ms/s) – ignored.")
-            base_slope = 0.0
+    # ---- 1. the trend is the drift estimate -------------------------------
+    # Theil-Sen already answered this above; the median of gap slopes is only
+    # the fallback for a file too short to fit a line.  A real PAL drift reads
+    # +41.7 ms/s, so only something beyond 100 ms/s (10 % tempo) is nonsense.
+    base_slope = trend_slope
+    if base_slope is None:
+        gap_slopes = []
+        for p, q in zip(usable, usable[1:]):
+            dt = float(q["t"]) - float(p["t"])
+            if dt > 0.5:
+                gap_slopes.append((float(q["offset"]) - float(p["offset"])) / dt)
+        base_slope = float(np.median(gap_slopes)) if gap_slopes else 0.0
+    if abs(base_slope) > 100.0:
+        warnings.append("Global slope is implausible for drift (>100 ms/s) – ignored.")
+        base_slope = 0.0
+    elif abs(base_slope) > 25.0:
+        warnings.append(f"Very large drift ({base_slope:+.3f} ms/s) – "
+                        "check the points if that surprises you.")
 
-    # ---- 2. breakpoints: offset jumps that the drift cannot explain -------
+    # ---- 2. breakpoints: offset jumps the drift cannot explain -------
+    # Two noisy measurements must not split the film.  Different dubs scatter
+    # by 100-150 ms, which is the size of a real edit, so the comparison runs
+    # on a five-point running median (noise shrinks, a real step stays a step)
+    # and the threshold grows with the measured scatter of the file.
+    if len(usable) >= 5:
+        raw_offsets = np.array([float(p["offset"]) for p in usable])
+        smooth = np.array([
+            float(np.median(raw_offsets[max(0, i - 2): i + 3]))
+            for i in range(len(raw_offsets))
+        ])
+    else:
+        smooth = np.array([float(p["offset"]) for p in usable])
+    jump_limit = max(jump_ms, 4.0 * (trend_mad or 0.0))
     breaks = []
     for i in range(1, len(usable)):
         dt = float(usable[i]["t"]) - float(usable[i - 1]["t"])
-        delta = float(usable[i]["offset"]) - float(usable[i - 1]["offset"])
-        if abs(delta - base_slope * dt) > jump_ms:
+        delta = float(smooth[i]) - float(smooth[i - 1])
+        if abs(delta - base_slope * dt) > jump_limit:
             breaks.append(i)
 
     groups, start = [], 0

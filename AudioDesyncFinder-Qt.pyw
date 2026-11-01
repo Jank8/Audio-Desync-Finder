@@ -395,17 +395,40 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
             done[index] = length
         report(force=True)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        pending = [pool.submit(run, i) for i in range(workers)]
-        for fut in as_completed(pending):
+    # Stop has to bite while every slice is still reading its pipe: waiting for
+    # the next completed future would keep the app busy for a whole slice.
+    stop_watch = threading.Event()
+    cancelled = threading.Event()
+
+    def watch() -> None:
+        """Kill the running slices as soon as the caller asks to stop."""
+        while not stop_watch.wait(0.2):
             if should_stop is not None and should_stop():
+                cancelled.set()
                 for proc in list(_ffmpeg_procs):
                     try:
                         proc.kill()
                     except Exception:
                         pass
-                raise RuntimeError("Cancelled by the user")
-            fut.result()
+                return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending = [pool.submit(run, i) for i in range(workers)]
+            for fut in as_completed(pending):
+                if cancelled.is_set() or (should_stop is not None and should_stop()):
+                    for proc in list(_ffmpeg_procs):
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    raise RuntimeError("Cancelled by the user")
+                fut.result()
+    finally:
+        stop_watch.set()
+        watcher.join(timeout=1.0)
 
     usable = [p for p in parts if p is not None and len(p)]
     return np.concatenate(usable) if usable else np.zeros(0, dtype=np.int16)
@@ -1473,7 +1496,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.46"
+APP_VERSION = "3.0.47"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

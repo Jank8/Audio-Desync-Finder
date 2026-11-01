@@ -1347,7 +1347,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.35"
+APP_VERSION = "3.0.36"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1502,17 +1502,20 @@ class DropLineEdit(LineEdit):
         self._on_drop = on_drop
         self.setAcceptDrops(True)
 
+    def set_drop_hint(self, on: bool) -> None:
+        self.setStyleSheet("LineEdit { border: 1px solid #4cc2ff; }" if on else "")
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            self.setStyleSheet("LineEdit { border: 1px solid #4cc2ff; }")
+            self.set_drop_hint(True)
             event.acceptProposedAction()
 
     def dragLeaveEvent(self, event):
-        self.setStyleSheet("")
+        self.set_drop_hint(False)
         event.accept()
 
     def dropEvent(self, event):
-        self.setStyleSheet("")
+        self.set_drop_hint(False)
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 self._on_drop(url.toLocalFile())
@@ -1539,6 +1542,7 @@ class MainWindow(FluentWindow):
             pass
         self.resize(1240, 860)
         self.setMicaEffectEnabled(True)
+        self.setAcceptDrops(True)      # a drop anywhere fills the first empty field
         self.setMinimumSize(1000, 640)
 
         self.ref_path = ""
@@ -1937,6 +1941,28 @@ class MainWindow(FluentWindow):
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)
                 self.progress.setValue(100 if self.plan else 0)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            for field in (self.edit_ref, self.edit_tgt):
+                field.set_drop_hint(True)
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        for field in (self.edit_ref, self.edit_tgt):
+            field.set_drop_hint(False)
+        event.accept()
+
+    def dropEvent(self, event):
+        for field in (self.edit_ref, self.edit_tgt):
+            field.set_drop_hint(False)
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        for path in paths:
+            if not self.ref_path:
+                self.set_path("ref", path)
+            elif not self.tgt_path:
+                self.set_path("tgt", path)
+        event.acceptProposedAction()
 
     def check_ffmpeg(self):
         """Offer a one-click winget install when FFmpeg is missing."""

@@ -158,7 +158,8 @@ def _run_ffmpeg(cmd, **kwargs):
 
 
 def _run_ffmpeg_progress(cmd, total_s, pct_from, pct_to, report=None, should_stop=None):
-    full = [cmd[0], "-nostats", "-progress", "pipe:1"] + list(cmd[1:])
+    full = [cmd[0], "-nostats", "-stats_period", "0.05",
+            "-progress", "pipe:1"] + list(cmd[1:])
     proc = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL, startupinfo=get_startupinfo())
     _ffmpeg_procs.append(proc)
@@ -332,23 +333,27 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
     done = [0.0] * workers          # seconds of audio decoded inside each slice
     lock = threading.Lock()
     reported = [0.0]
+    last_tick = [0.0]
 
     def report(force: bool = False) -> None:
-        """Overall fraction from the slice positions, throttled to 0.5 %."""
+        """Overall fraction from the slice positions, at most 30 times a second."""
         if on_fraction is None:
             return
+        now = time.time()
         with lock:
             frac = min(1.0, sum(done) / total) if total > 0 else 0.0
-            if not force and frac - reported[0] < 0.0001:
+            if not force and (frac - reported[0] < 0.0001
+                              or now - last_tick[0] < 0.03):
                 return
             reported[0] = frac
+            last_tick[0] = now
         on_fraction(frac)
 
     def run(index: int) -> None:
         start = index * chunk
         length = chunk + (0.5 if index < workers - 1 else 0.0)
         cmd = ["ffmpeg", "-v", "error", "-nostdin", "-nostats",
-               "-progress", "pipe:2",
+               "-stats_period", "0.05", "-progress", "pipe:2",
                "-ss", f"{start:.3f}", "-i", path, "-t", f"{length:.3f}",
                "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(sr),
                "-f", "s16le", "-"]
@@ -456,7 +461,8 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
             _DECODE_MODE["value"] = f"parallel, {workers} slices"
             return sr, np.ascontiguousarray(data.astype(np.int16, copy=False))
     _DECODE_MODE["value"] = "sequential"
-    cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
+    cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-stats_period", "0.05",
+           "-progress", "pipe:1",
            "-i", path, "-vn", "-map", "0:a:0",
            "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", out]
     try:
@@ -1532,7 +1538,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.52"
+APP_VERSION = "3.0.53"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1896,6 +1902,7 @@ class MainWindow(FluentWindow):
         # ---------------- footer ----------------------------------------
         footer = QHBoxLayout()
         self.progress = ProgressBar()
+        self.progress.setRange(0, 1000)      # 0.1 % steps, so the bar creeps
         self.progress.setValue(0)
         footer.addWidget(self.progress, 1)
         self.status = BodyLabel("Ready")
@@ -1909,7 +1916,7 @@ class MainWindow(FluentWindow):
         self._draw()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._drain)
-        self.timer.start(100)
+        self.timer.start(33)
 
     # ------------------------------------------------------------------ UI
     def _file_row(self, layout, label, which, checked=False):
@@ -2090,6 +2097,7 @@ class MainWindow(FluentWindow):
             return
         self._remember_dir(path)
         path = mka_path(path)
+        self.stop_event.clear()          # a previous Stop must not cancel this
         self.btn_export.setEnabled(False)
         self.btn_stop.setEnabled(True)
         threading.Thread(target=self._export_task, args=(path,), daemon=True).start()
@@ -2146,7 +2154,7 @@ class MainWindow(FluentWindow):
                 self.log(payload)
             elif kind == "progress":
                 pct, text = payload
-                self.progress.setValue(int(pct))
+                self.progress.setValue(int(pct * 10))
                 self.status.setText(text)
             elif kind == "notify":
                 path, ok = payload
@@ -2168,7 +2176,12 @@ class MainWindow(FluentWindow):
             elif kind == "idle":
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)
-                self.progress.setValue(100 if self.plan else 0)
+                if self.stop_event.is_set():
+                    # the worker stopped, so "Stopping…" must not stay on screen
+                    self.status.setText("Stopped")
+                    self.progress.setValue(0)
+                else:
+                    self.progress.setValue(1000 if self.plan else 0)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

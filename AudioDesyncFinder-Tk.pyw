@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.52"
+APP_VERSION = "2.0.53"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -164,7 +164,8 @@ def _run_ffmpeg_progress(cmd: list, total_s: float, pct_from: float,
 
     Raises RuntimeError when should_stop() asks to cancel.
     """
-    full = [cmd[0], "-nostats", "-progress", "pipe:1"] + list(cmd[1:])
+    full = [cmd[0], "-nostats", "-stats_period", "0.05",
+            "-progress", "pipe:1"] + list(cmd[1:])
     proc = subprocess.Popen(full, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL,
@@ -2248,23 +2249,27 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
     done = [0.0] * workers          # seconds of audio decoded inside each slice
     lock = threading.Lock()
     reported = [0.0]
+    last_tick = [0.0]
 
     def report(force: bool = False) -> None:
-        """Overall fraction from the slice positions, throttled to 0.5 %."""
+        """Overall fraction from the slice positions, at most 30 times a second."""
         if on_fraction is None:
             return
+        now = time.time()
         with lock:
             frac = min(1.0, sum(done) / total) if total > 0 else 0.0
-            if not force and frac - reported[0] < 0.0001:
+            if not force and (frac - reported[0] < 0.0001
+                              or now - last_tick[0] < 0.03):
                 return
             reported[0] = frac
+            last_tick[0] = now
         on_fraction(frac)
 
     def run(index: int) -> None:
         start = index * chunk
         length = chunk + (0.5 if index < workers - 1 else 0.0)
         cmd = ["ffmpeg", "-v", "error", "-nostdin", "-nostats",
-               "-progress", "pipe:2",
+               "-stats_period", "0.05", "-progress", "pipe:2",
                "-ss", f"{start:.3f}", "-i", path, "-t", f"{length:.3f}",
                "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(sr),
                "-f", "s16le", "-"]
@@ -2372,7 +2377,8 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
             _DECODE_MODE["value"] = f"parallel, {workers} slices"
             return sr, np.ascontiguousarray(data.astype(np.int16, copy=False))
     _DECODE_MODE["value"] = "sequential"
-    cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
+    cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-stats_period", "0.05",
+           "-progress", "pipe:1",
            "-i", path, "-vn", "-map", "0:a:0",
            "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", out]
     try:
@@ -3744,7 +3750,7 @@ class TimelinePanel:
         except tk.TclError:
             return
         try:
-            self.frame.after(60, self._poll)
+            self.frame.after(33, self._poll)
         except tk.TclError:
             pass
 
@@ -3793,6 +3799,10 @@ class TimelinePanel:
             self.progress_var.set(0)
             if text:
                 self.status_var.set(text)
+        elif self.stop_event.is_set():
+            # the worker stopped, so "Stopping…" must not stay on screen
+            self.status_var.set("Stopped")
+            self.progress_var.set(0)
 
     def _start(self, fn, text: str) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -4817,7 +4827,7 @@ root.after(200, _apply_responsive_layout)
 
 # Post-startup checks (run after mainloop starts via `after`)
 # ---------------------------------------------------------------------------
-root.after(80, _pump_ui)                  # drain UI updates from worker threads
+root.after(33, _pump_ui)                  # drain UI updates from worker threads
 root.after(120, flush_startup_messages)   # replay auto-installer log, if any
 root.after(300, ensure_ffmpeg)            # detect FFmpeg or install it via winget
 

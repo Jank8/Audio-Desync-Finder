@@ -101,7 +101,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from qfluentwidgets import (BodyLabel, CardWidget, CheckBox, ComboBox, FluentWindow,
+from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
                             InfoBar, InfoBarPosition, LineEdit, MessageBox,
                             PrimaryPushButton, ProgressBar, PushButton,
                             RadioButton, SpinBox, StrongBodyLabel, TableWidget,
@@ -1418,7 +1418,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.41"
+APP_VERSION = "3.0.42"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1775,10 +1775,6 @@ class MainWindow(FluentWindow):
         self.log_view.setStyleSheet(
             f"TextEdit{{background:transparent;border:none;"
             f"color:{self.log_fg};font:9pt 'Consolas';}}")
-        try:
-            self.verify_label.setStyleSheet(f"color: {self.chart_fg};")
-        except Exception:
-            pass
         ll.addWidget(self.log_view)
         bottom.addWidget(log_card, 1)
         outer.addLayout(bottom, 2)
@@ -1793,17 +1789,6 @@ class MainWindow(FluentWindow):
         self.btn_export = PrimaryPushButton("⬇  Export corrected audio…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_audio)
-        self.check_verify = CheckBox("")
-        self.check_verify.setChecked(True)
-        self.check_verify.setToolTip(
-            "Measure the exported file and shift the plan if a few ms are left")
-        footer.addWidget(self.check_verify)
-        # the Fluent check box keeps the palette colour (black) for its own text,
-        # which is invisible on the dark footer - use a label we can colour
-        self.verify_label = BodyLabel("verify & auto-align")
-        self.verify_label.setStyleSheet(f"color: {self.chart_fg};")
-        self.verify_label.setToolTip(self.check_verify.toolTip())
-        footer.addWidget(self.verify_label)
         footer.addWidget(self.btn_export)
         outer.addLayout(footer)
 
@@ -1995,7 +1980,7 @@ class MainWindow(FluentWindow):
                 should_stop=self.stop_event.is_set)
             self.ui_queue.put(("log", f"✓ Saved: {path}"))
             self.ui_queue.put(("notify", (path, True)))
-            if self.check_verify.isChecked():
+            if True:  # always verify and auto-align
                 ref_path = self._ordered_paths()[0]
                 self.ui_queue.put(("log", "Checking the alignment of the exported file…"))
                 residual = None

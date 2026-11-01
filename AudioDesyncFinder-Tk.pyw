@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.34"
+APP_VERSION = "2.0.35"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4410,6 +4410,15 @@ if DND_FILES is not None:
     # DropLeave, hide it, fire DropEnter again - a flicker loop.  The fields
     # themselves light up instead, and a drop anywhere fills the first empty one.
 
+    def _frame(field, on: bool):
+        """Accent border around a field, the same feedback the Qt build gives."""
+        try:
+            field.configure(highlightthickness=2 if on else 0,
+                            highlightbackground=fg_accent,
+                            highlightcolor=fg_accent)
+        except Exception:
+            pass
+
     def _highlight(on: bool):
         colour = "#2b5f8f" if on else bg_input
         for field in (entry_file1, entry_file2):
@@ -4417,6 +4426,7 @@ if DND_FILES is not None:
                 field.configure(bg=colour)
             except Exception:
                 pass
+            _frame(field, on)
 
     def _drop_one(event, field):
         _highlight(False)
@@ -4453,10 +4463,11 @@ if DND_FILES is not None:
     root.dnd_bind("<<DropLeave>>", lambda e: _highlight(False))
     root.dnd_bind("<<Drop>>", _drop_any)
 
-    entry_file1.drop_target_register(DND_FILES)
-    entry_file1.dnd_bind("<<Drop>>", lambda e: _drop_one(e, entry_file1))
-    entry_file2.drop_target_register(DND_FILES)
-    entry_file2.dnd_bind("<<Drop>>", lambda e: _drop_one(e, entry_file2))
+    for _field in (entry_file1, entry_file2):
+        _field.drop_target_register(DND_FILES)
+        _field.dnd_bind("<<DropEnter>>", lambda e, f=_field: _frame(f, True))
+        _field.dnd_bind("<<DropLeave>>", lambda e, f=_field: _frame(f, False))
+        _field.dnd_bind("<<Drop>>", lambda e, f=_field: _drop_one(e, f))
 
 tk.Button(file2_container, text="Browse", command=select_file2, bg=btn_primary, fg=fg_main,
           relief=tk.FLAT, font=("Segoe UI", 9), cursor="hand2", width=8,

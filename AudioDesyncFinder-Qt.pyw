@@ -1347,7 +1347,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.31"
+APP_VERSION = "3.0.32"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1492,6 +1492,32 @@ def system_accent_hex() -> str:
         return f"#{r:02x}{g:02x}{b:02x}"
     except Exception:
         return "#4cc2ff"
+
+
+class DropLineEdit(LineEdit):
+    """Line edit that accepts a media file dropped onto it."""
+
+    def __init__(self, on_drop, parent=None):
+        super().__init__(parent)
+        self._on_drop = on_drop
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            self.setStyleSheet("LineEdit { border: 1px solid #4cc2ff; }")
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet("")
+        event.accept()
+
+    def dropEvent(self, event):
+        self.setStyleSheet("")
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                self._on_drop(url.toLocalFile())
+                break
+        event.acceptProposedAction()
 
 
 class Card(CardWidget):
@@ -1690,7 +1716,7 @@ class MainWindow(FluentWindow):
     def _file_row(self, layout, label, which, checked=False):
         row = QHBoxLayout()
         row.addWidget(StrongBodyLabel(label))
-        edit = LineEdit()
+        edit = DropLineEdit(lambda p, w=which: self.set_path(w, p))
         edit.setPlaceholderText("choose a media file…")
         edit.setReadOnly(True)
         row.addWidget(edit, 1)
@@ -1717,6 +1743,11 @@ class MainWindow(FluentWindow):
         if not path:
             return
         self._remember_dir(path)
+        self.set_path(which, path)
+
+    def set_path(self, which, path):
+        """Assign a file to File 1 or File 2 - used by Browse and by drop."""
+        path = str(path)
         if which == "ref":
             self.ref_path = path
             self.edit_ref.setText(os.path.basename(path))

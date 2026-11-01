@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.31"
+APP_VERSION = "2.0.32"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -292,6 +292,7 @@ REQUIRED_PACKAGES = [
     ("numpy", "numpy"),
     ("scipy", "scipy"),
     ("matplotlib", "matplotlib"),
+    ("tkinterdnd2", "tkinterdnd2"),
 ]
 
 PIP_INSTALL_TIMEOUT_S = 900      # hard cap for the whole installation phase
@@ -4135,7 +4136,13 @@ except Exception:
     pass
 
 
-root = tk.Tk()
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except Exception:                      # optional: drag and drop stays off
+    DND_FILES = None
+    TkinterDnD = None
+
+root = TkinterDnD.Tk() if TkinterDnD is not None else tk.Tk()
 if sv_ttk is not None:
     sv_ttk.set_theme("light" if APP_LIGHT else "dark")
 def _icon_rgb(value: str):
@@ -4397,6 +4404,24 @@ tk.Label(file2_container, text="File 2:", bg=bg_panel, fg=fg_main,
 entry_file2 = tk.Entry(file2_container, bg=bg_input, fg=fg_main, insertbackground="white",
                        relief=tk.FLAT, font=("Segoe UI", 9))
 entry_file2.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4, padx=(5, 5))
+
+if DND_FILES is not None:
+    def _tk_drop(event, entry):
+        try:
+            path = root.tk.splitlist(event.data)[0]
+        except Exception:
+            return
+        entry.delete(0, tk.END)
+        entry.insert(0, path)
+        try:
+            load_timeline()
+        except Exception:
+            pass
+
+    for _entry in (entry_file1, entry_file2):
+        _entry.drop_target_register(DND_FILES)
+        _entry.dnd_bind("<<Drop>>", lambda e, w=_entry: _tk_drop(e, w))
+
 tk.Button(file2_container, text="Browse", command=select_file2, bg=btn_primary, fg=fg_main,
           relief=tk.FLAT, font=("Segoe UI", 9), cursor="hand2", width=8,
           activebackground=btn_hover).pack(side=tk.LEFT, padx=(0, 5))

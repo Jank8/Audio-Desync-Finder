@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.53"
+APP_VERSION = "2.0.54"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2907,6 +2907,41 @@ def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
     return None
 
 
+def _drop_local_outliers(points, limit_ms: float = 400.0, radius: int = 4,
+                         max_gap_s: float = 240.0):
+    """
+    Drop measurements that disagree with their neighbours in time.
+
+    A correlation that locks onto the wrong peak lands hundreds of milliseconds
+    or seconds away, and one such point is enough to split the model in three:
+    the jump detector sees a step and the fit sees a slope, so a flat +690 ms
+    offset turns into twenty segments and a drift that does not exist.
+
+    Comparing each point with the median of the points around it keeps the junk
+    out of the model without touching a real edit, where a whole run of points
+    moves at once.  Points further apart than max_gap_s are not neighbours.
+    """
+    if len(points) < 5:
+        return points
+    kept = []
+    for i, point in enumerate(points):
+        t = float(point["t"])
+        near = [p for p in points[max(0, i - radius): i + radius + 1]
+                if p is not point and abs(float(p["t"]) - t) <= max_gap_s]
+        if len(near) < 2:
+            kept.append(point)
+            continue
+        values = np.array([float(p["offset"]) for p in near], dtype=float)
+        med = float(np.median(values))
+        mad = float(np.median(np.abs(values - med)))
+        # the band has to scale with the local scatter, or a drifting stretch
+        # would look like a queue of outliers
+        span = max(float(limit_ms), 8.0 * 1.4826 * mad)
+        if abs(float(point["offset"]) - med) <= span:
+            kept.append(point)
+    return kept if len(kept) >= 3 else points
+
+
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
                merge_ms: float = 60.0, slope_hint: float = None):
@@ -2935,6 +2970,14 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         return {"segments": [], "jumps": [], "initial_offset": 0.0,
                 "warnings": ["No points above the confidence threshold."],
                 "duration": duration}
+
+    # ---- 0. throw out measurements that disagree with their neighbours ----
+    cleaned = _drop_local_outliers(usable)
+    dropped = len(usable) - len(cleaned)
+    if dropped:
+        warnings.append(f"Dropped {dropped} measurement(s) that disagreed with "
+                        "their neighbours.")
+        usable = cleaned
 
     # ---- 1. robust drift estimate over all consecutive gaps ---------------
     gap_slopes = []

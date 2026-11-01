@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.58"
+APP_VERSION = "2.0.60"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3053,6 +3053,25 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                         "their neighbours.")
         usable = cleaned
 
+    # ---- 0b. and points far outside the offset the file itself reports ----
+    # A correlation can lock onto a totally different peak, and it does so in
+    # bursts: neighbours agree with each other, so the local test above keeps
+    # them.  The whole file has to vote as well.  The band scales with the
+    # spread, so a real drift (wide spread) and a real edit (two plateaus,
+    # wide MAD) stay intact while a burst three seconds away cannot survive.
+    if len(usable) >= 8:
+        values = np.array([float(p["offset"]) for p in usable])
+        middle = float(np.median(values))
+        spread = float(np.median(np.abs(values - middle)))
+        band = max(500.0, 8.0 * 1.4826 * spread)
+        inside = [p for p in usable
+                  if abs(float(p["offset"]) - middle) <= band]
+        if 3 <= len(inside) < len(usable):
+            warnings.append(
+                f"Dropped {len(usable) - len(inside)} measurement(s) far "
+                "outside the offset the rest of the file shows.")
+            usable = inside
+
     # ---- 1. robust drift estimate over all consecutive gaps ---------------
     gap_slopes = []
     for p, q in zip(usable, usable[1:]):
@@ -3147,6 +3166,41 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             "n": fit["n"],
             "rms": round(fit["rms"], 2),
         })
+
+    # ---- 4b. a segment the measurements do not support is not a segment --
+    # A burst of bad correlations survives the local outlier pass because its
+    # neighbours are just as bad; the fit that comes out of it has a huge RMS
+    # or an impossible slope.  Dropping those segments (and handing their time
+    # range to the neighbour that does fit) turns a 25-segment mess built on
+    # noise into the one flat line the film actually has.
+    def plausible(seg) -> bool:
+        if seg["n"] < 2 or seg["rms"] > 3.0 * outlier_ms:
+            return False
+        # a real PAL drift has a large slope but a small RMS, so an impossible
+        # slope only condemns a segment whose points do not sit on it either
+        if abs(seg["slope"]) > 8.0 and seg["rms"] > outlier_ms:
+            return False
+        return True
+
+    if len(segments) > 1:
+        cleaned = []
+        dropped = 0
+        for seg in segments:
+            if plausible(seg):
+                cleaned.append(seg)
+            elif cleaned:
+                cleaned[-1]["t_end"] = seg["t_end"]       # absorb forwards
+                dropped += 1
+            else:
+                dropped += 1
+        if cleaned:
+            if cleaned[0]["t_start"] > 0.0:
+                cleaned[0]["t_start"] = 0.0               # leading junk
+            cleaned[-1]["t_end"] = float(duration)
+        if dropped:
+            warnings.append(
+                f"Dropped {dropped} segment(s) the measurements do not support.")
+            segments = cleaned
 
     # ---- 5. optional: lock the drift to a known framerate ratio -----------
     if slope_hint is not None:

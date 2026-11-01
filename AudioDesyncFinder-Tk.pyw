@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.38"
+APP_VERSION = "2.0.39"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3390,6 +3390,8 @@ class TimelinePanel:
         self.var_window = _spin(row, "Window (s):", 40, 6, 5)
         self.var_step = _spin(row, "Step (s):", 30, 6, 5)
         self.var_conf = _spin(row, "Min confidence:", 2.0, 5, 0.5)
+        _cores_default = max(1, (os.cpu_count() or 4) - 2)
+        self.var_cores = _spin(row, "Cores:", _cores_default, 4, 1)
 
         tk.Label(row, text="Signal:", bg=BG_PANEL, fg=FG_DIM,
                  font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 3))
@@ -3787,7 +3789,8 @@ class TimelinePanel:
         ref, tgt, meta = decode_pair(
             self.ref_path, self.target_path,
             progress=lambda msg: self._post("status", msg),
-            on_fraction=self._decode_fraction)
+            on_fraction=self._decode_fraction,
+            workers=int(self._num(self.var_cores, 4, 1, 64)))
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
 

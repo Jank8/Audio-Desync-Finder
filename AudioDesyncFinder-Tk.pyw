@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.42"
+APP_VERSION = "2.0.43"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3578,12 +3578,6 @@ class TimelinePanel:
                                     activebackground="#2a5a8a", padx=16, pady=8)
         self.btn_export.pack(side=tk.LEFT)
 
-        self.verify_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(footer, text="verify & auto-align", variable=self.verify_var,
-                       bg=BG_DARK, fg=FG_DIM, selectcolor=BG_INPUT, bd=0,
-                       highlightthickness=0, activebackground=BG_DARK,
-                       activeforeground="#ffffff",
-                       font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(14, 0))
 
         for label, cmd in (("Save plan…", self.save_plan),
                            ("Load plan…", self.load_plan),
@@ -3925,9 +3919,7 @@ class TimelinePanel:
         export_plan(plan, self.target_path, out_path, progress=report,
                     log=console_log, should_stop=self.stop_event.is_set)
 
-        if not self.verify_var.get():
-            self._post("export_done", out_path)
-            return
+        # always measure the result and re-export when a few ms are left
         if self.stop_event.is_set():
             raise RuntimeError("Cancelled")
 

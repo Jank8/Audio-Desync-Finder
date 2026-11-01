@@ -554,6 +554,29 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
     return ref, tgt, meta
 
 
+def decode_key(ref_path: str, tgt_path: str):
+    """
+    Identity of a file pair on disk, so a re-scan can reuse the decoded PCM.
+
+    Decoding is the expensive part of a scan - minutes of reading a slow disk -
+    and Window, Step, Min confidence, Signal or Cores do not change a single
+    sample of it.  Name, size and modification time are enough to notice that a
+    file was replaced in the meantime.
+    """
+    try:
+        ref_stat = os.stat(ref_path)
+        tgt_stat = os.stat(tgt_path)
+    except OSError:
+        return None
+    return (str(ref_path), ref_stat.st_mtime_ns, ref_stat.st_size,
+            str(tgt_path), tgt_stat.st_mtime_ns, tgt_stat.st_size)
+
+
+def pair_fits_cache(ref, tgt, hours: float = 8.0) -> bool:
+    """Keep a decoded pair in memory only while it is reasonably small."""
+    return (len(ref) + len(tgt)) <= hours * 3600.0 * SCAN_SR
+
+
 def _correlate_peak(x, y, hop_s: float, guard_s: float = 0.060):
     """
     Correlate two equally sampled signals and refine the peak.
@@ -1581,7 +1604,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.54"
+APP_VERSION = "3.0.55"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1784,6 +1807,7 @@ class MainWindow(FluentWindow):
         self.plan = None
         self.points = []
         self.meta = None
+        self.decoded = {}          # last decoded pair, reused when only settings change
         self.worker = None
         self.accent = system_accent_hex()
         self.chart_bg = "#ffffff" if LIGHT else "#202020"
@@ -2065,15 +2089,29 @@ class MainWindow(FluentWindow):
             ref_path, tgt_path = self._ordered_paths()
             self.ui_queue.put(("log", "── Scan started ─────────────"))
             scan_t0 = time.time()
-            ref, tgt, meta = decode_pair(
-                ref_path, tgt_path,
-                progress=lambda m: self.ui_queue.put(("log", m)),
-                on_fraction=lambda phase, f: self.ui_queue.put(
-                    ("progress", (5 + (30 if phase == "ref" else 32) * f,
-                                  f"Decoding {phase}… {f * 100:.3f}% · "
-                                  f"{time.time() - scan_t0:.0f} s"))),
-                should_stop=self.stop_event.is_set,
-                workers=int(self._num(self.entry_cores, _decode_workers())))
+            key = decode_key(ref_path, tgt_path)
+            if key is not None and self.decoded.get("key") == key:
+                ref, tgt, meta = (self.decoded["ref"], self.decoded["tgt"],
+                                  self.decoded["meta"])
+                self.ui_queue.put(("log", "Reusing the audio decoded for the "
+                                          "previous scan - only the settings changed."))
+                self.ui_queue.put(("progress", (68, "Using the cached audio…")))
+            else:
+                self.decoded = {}          # free the old pair before the new one lands
+                ref, tgt, meta = decode_pair(
+                    ref_path, tgt_path,
+                    progress=lambda m: self.ui_queue.put(("log", m)),
+                    on_fraction=lambda phase, f: self.ui_queue.put(
+                        ("progress", (5 + (30 if phase == "ref" else 32) * f,
+                                      f"Decoding {phase}… {f * 100:.3f}% · "
+                                      f"{time.time() - scan_t0:.0f} s"))),
+                    should_stop=self.stop_event.is_set,
+                    workers=int(self._num(self.entry_cores, _decode_workers())))
+                if key is not None and pair_fits_cache(ref, tgt):
+                    self.decoded = {"key": key, "ref": ref, "tgt": tgt,
+                                    "meta": meta}
+                else:
+                    self.decoded = {}
             if self.stop_event.is_set():
                 self.ui_queue.put(("log", "Stopped by the user."))
                 return

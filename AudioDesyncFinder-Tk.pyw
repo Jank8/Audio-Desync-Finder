@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.54"
+APP_VERSION = "2.0.55"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2470,6 +2470,29 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
     return ref, tgt, meta
 
 
+def decode_key(ref_path: str, tgt_path: str):
+    """
+    Identity of a file pair on disk, so a re-scan can reuse the decoded PCM.
+
+    Decoding is the expensive part of a scan - minutes of reading a slow disk -
+    and Window, Step, Min confidence, Signal or Cores do not change a single
+    sample of it.  Name, size and modification time are enough to notice that a
+    file was replaced in the meantime.
+    """
+    try:
+        ref_stat = os.stat(ref_path)
+        tgt_stat = os.stat(tgt_path)
+    except OSError:
+        return None
+    return (str(ref_path), ref_stat.st_mtime_ns, ref_stat.st_size,
+            str(tgt_path), tgt_stat.st_mtime_ns, tgt_stat.st_size)
+
+
+def pair_fits_cache(ref, tgt, hours: float = 8.0) -> bool:
+    """Keep a decoded pair in memory only while it is reasonably small."""
+    return (len(ref) + len(tgt)) <= hours * 3600.0 * SCAN_SR
+
+
 def _correlate_peak(x, y, hop_s: float, guard_s: float = 0.060):
     """
     Correlate two equally sampled signals and refine the peak.
@@ -3517,6 +3540,7 @@ class TimelinePanel:
 
         self.ref_data = None          # decoded 16 kHz int16 arrays
         self.tgt_data = None
+        self._decoded_key = None      # identity of the pair those arrays came from
         self.meta = None
         self.scan_rate = 1.0          # 1.0, or the drift compensation factor
         self.points = []              # measurement points
@@ -3955,12 +3979,21 @@ class TimelinePanel:
         console_log("── Timeline scan started ─────────────────────", "bold")
         self._post("status", "Decoding audio…")
         self._scan_t0 = time.time()
-        ref, tgt, meta = decode_pair(
-            self.ref_path, self.target_path,
-            progress=lambda msg: self._post("status", msg),
-            on_fraction=self._decode_fraction,
-            should_stop=self.stop_event.is_set,
-            workers=int(self._num(self.var_cores, 4, 1, 64)))
+        key = decode_key(self.ref_path, self.target_path)
+        if key is not None and key == self._decoded_key and self.ref_data is not None:
+            ref, tgt, meta = self.ref_data, self.tgt_data, self.meta
+            console_log("Reusing the audio decoded for the previous scan - only "
+                        "the settings changed.", "info")
+            self._post("progress", (68.0, "Using the cached audio…"))
+        else:
+            self.ref_data = self.tgt_data = None   # free before decoding the new one
+            ref, tgt, meta = decode_pair(
+                self.ref_path, self.target_path,
+                progress=lambda msg: self._post("status", msg),
+                on_fraction=self._decode_fraction,
+                should_stop=self.stop_event.is_set,
+                workers=int(self._num(self.var_cores, 4, 1, 64)))
+            self._decoded_key = key if pair_fits_cache(ref, tgt) else None
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
 

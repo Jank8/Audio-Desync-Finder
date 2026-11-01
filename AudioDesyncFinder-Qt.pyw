@@ -238,6 +238,11 @@ ENVELOPE_CONF_SCALE = 2.0     # envelope peaks are broader, so their prominence
                               # is smaller – scaled to keep one threshold valid
                               # for both modes
 
+# A drift is only "noise" if it stays below this over the whole segment.  The
+# limit cannot be a rate: 0.06 ms/s is nothing over a minute and 350 ms over a
+# two-hour film.
+FLAT_DRIFT_MS = 25.0
+
 # codec -> (ffmpeg encoder, container extension)
 _CODEC_MAP = {
     "ac3":    ("ac3",        ".ac3"),
@@ -1109,10 +1114,13 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         segments = merged_segments
 
     # ---- 5c. tiny drifts are noise: keep the segment flat ----------------
-    # Resampling by 0.05 % for a few hundred seconds costs quality and buys
-    # nothing; below half a millisecond per second the plateau is flat.
+    # The cut-off is the drift accumulated over the whole segment, not a rate:
+    # 0.06 ms/s is invisible over a minute and 350 ms across a two-hour film.
     for seg in segments:
-        if not seg.get("locked") and abs(seg["slope"]) < 0.5:
+        if seg.get("locked"):
+            continue
+        span = max(1.0, float(seg["t_end"]) - float(seg["t_start"]))
+        if abs(float(seg["slope"])) * span < FLAT_DRIFT_MS:
             seg["slope"] = 0.0
             seg["atempo"] = 1.0
 
@@ -1465,7 +1473,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.45"
+APP_VERSION = "3.0.46"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

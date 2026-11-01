@@ -1350,8 +1350,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     for group in groups:
         slope, intercept, kept, rms = _fit_group(group, base_slope, outlier_ms)
         if len(kept) < len(group):
+            # the range, not the first point: the outliers are spread over the
+            # whole group, and "near t=20s" made it look local
             warnings.append(
-                f"Dropped {len(group) - len(kept)} outlier(s) near t={group[0]['t']:.0f}s.")
+                f"Dropped {len(group) - len(kept)} outlier(s) in "
+                f"{group[0]['t']:.0f}–{group[-1]['t']:.0f}s.")
         fits.append({"slope": slope, "intercept": intercept, "kept": kept,
                      "rms": rms, "n": len(kept)})
 
@@ -1860,7 +1863,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.63"
+APP_VERSION = "3.0.64"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

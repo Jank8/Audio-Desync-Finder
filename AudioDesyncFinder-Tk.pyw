@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.32"
+APP_VERSION = "2.0.34"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4406,21 +4406,57 @@ entry_file2 = tk.Entry(file2_container, bg=bg_input, fg=fg_main, insertbackgroun
 entry_file2.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4, padx=(5, 5))
 
 if DND_FILES is not None:
-    def _tk_drop(event, entry):
+    # No overlay: it used to appear under the cursor, which made the window fire
+    # DropLeave, hide it, fire DropEnter again - a flicker loop.  The fields
+    # themselves light up instead, and a drop anywhere fills the first empty one.
+
+    def _highlight(on: bool):
+        colour = "#2b5f8f" if on else bg_input
+        for field in (entry_file1, entry_file2):
+            try:
+                field.configure(bg=colour)
+            except Exception:
+                pass
+
+    def _drop_one(event, field):
+        _highlight(False)
         try:
             path = root.tk.splitlist(event.data)[0]
         except Exception:
             return
-        entry.delete(0, tk.END)
-        entry.insert(0, path)
-        try:
-            load_timeline()
-        except Exception:
-            pass
+        field.delete(0, tk.END)
+        field.insert(0, path)
+        if entry_file1.get().strip() and entry_file2.get().strip():
+            try:
+                load_timeline()
+            except Exception:
+                pass
 
-    for _entry in (entry_file1, entry_file2):
-        _entry.drop_target_register(DND_FILES)
-        _entry.dnd_bind("<<Drop>>", lambda e, w=_entry: _tk_drop(e, w))
+    def _drop_any(event):
+        _highlight(False)
+        try:
+            paths = list(root.tk.splitlist(event.data))
+        except Exception:
+            return
+        for path in paths:
+            field = entry_file1 if not entry_file1.get().strip() else entry_file2
+            field.delete(0, tk.END)
+            field.insert(0, path)
+        if entry_file1.get().strip() and entry_file2.get().strip():
+            try:
+                load_timeline()
+            except Exception:
+                pass
+
+    root.drop_target_register(DND_FILES)
+    root.dnd_bind("<<DropEnter>>", lambda e: _highlight(True))
+    root.dnd_bind("<<DropLeave>>", lambda e: _highlight(False))
+    root.dnd_bind("<<Drop>>", _drop_any)
+
+    entry_file1.drop_target_register(DND_FILES)
+    entry_file1.dnd_bind("<<Drop>>", lambda e: _drop_one(e, entry_file1))
+    entry_file2.drop_target_register(DND_FILES)
+    entry_file2.dnd_bind("<<Drop>>", lambda e: _drop_one(e, entry_file2))
 
 tk.Button(file2_container, text="Browse", command=select_file2, bg=btn_primary, fg=fg_main,
           relief=tk.FLAT, font=("Segoe UI", 9), cursor="hand2", width=8,

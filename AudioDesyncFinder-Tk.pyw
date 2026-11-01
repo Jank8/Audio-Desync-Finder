@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.57"
+APP_VERSION = "2.0.58"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -833,6 +833,42 @@ _ffmpeg_procs: list = []  # Running media-extraction (ffmpeg) processes
 _install_procs: list = []  # Running winget installers
 _DECODE_MODE   = {"value": "?"}  # what the last _decode_track actually used
 
+
+def acquire_single_instance(name: str = "AudioDesyncFinder"):
+    """
+    Hold a named Windows mutex for the life of the process.
+
+    Returns the handle (keep it alive) or None when another instance already
+    owns the name.  A second copy would fight the first one for the same files
+    and the same decoded-audio cache, and none of the UI is built for two.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool,
+                                          ctypes.c_wchar_p]
+        handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
+        if not handle:
+            return True                  # cannot tell - do not block the app
+        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            return None
+        return handle
+    except Exception:
+        return True
+
+
+def show_message(title: str, text: str) -> None:
+    """A message box for the moments before (or without) a GUI toolkit."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x40)
+    except Exception:
+        pass
+
 # ANSI escape sequences emitted by winget/ffmpeg when colour is forced on
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -1162,34 +1198,6 @@ def _run_correlation(file1: str, file2: str,
 
 
 
-def drift_measure(point_index: int) -> None:
-    """Measure A/V offset at one time point (two-file mode only)."""
-    if not check_ffmpeg_before_analyze():
-        return
-    ref_path = entry_file1.get().strip()
-    source   = entry_file2.get().strip()
-    if not ref_path or not source:
-        messagebox.showerror("Error", "Select both File 1 (reference) and File 2 (source) first.")
-        return
-    try:
-        duration = float(drift_entry_duration.get())
-        if point_index == 0:
-            t_str = drift_entry_t1.get(); lbl = drift_lbl_result1
-        else:
-            t_str = drift_entry_t2.get(); lbl = drift_lbl_result2
-        t = to_seconds(t_str)
-        console_log(f"Drift point {point_index+1}: t={t:.1f}s...", "info")
-        offset_ms = _run_correlation(ref_path, source, t, t, duration)
-        drift_points[point_index] = {"time_s": t, "offset_ms": offset_ms}
-        sign = "+" if offset_ms >= 0 else ""
-        lbl.config(text=f"Offset: {sign}{offset_ms} ms", fg="#4a9eff")
-        console_log(f"  Point {point_index+1}: {sign}{offset_ms} ms", "ok")
-        _drift_update_calculated()
-    except Exception as e:
-        messagebox.showerror("Error", f"Measurement failed:\n{e}")
-        console_log(f"Drift measurement failed: {e}", "error")
-
-
 def _drift_update_calculated() -> None:
     """Recompute drift rate and atempo from the two measured points."""
     p1, p2 = drift_points[0], drift_points[1]
@@ -1235,7 +1243,8 @@ def _get_file_duration(path: str) -> float:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, startupinfo=get_startupinfo()
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo()
         )
         return float(result.stdout.strip())
     except Exception:
@@ -1422,50 +1431,6 @@ def on_scroll(value: str) -> None:
     update_visualization()
 
 
-def apply_manual_offset() -> None:
-    """
-    Apply a user-supplied offset (in milliseconds) to the visualisation
-    without re-running the FFmpeg extraction or cross-correlation.
-
-    Reads the value from entry_manual_offset, converts it to samples, stores
-    it in viz_data['offset_samples'], and redraws the chart.  Also updates
-    the result label with a plain-language description of the new offset.
-
-    Errors (no data loaded, non-numeric input) are shown in a dialog.
-    """
-    try:
-        if viz_data['data1'] is None or viz_data['sr'] is None:
-            messagebox.showerror("Error", "Run analysis before applying a manual offset.")
-            return
-
-        manual_ms = float(entry_manual_offset.get())
-        manual_samples = int((manual_ms / 1000.0) * viz_data['sr'])
-        # Sign convention matches analyze_sync: positive ms means target is delayed.
-        viz_data['offset_samples'] = -manual_samples if ref_var.get() == 1 else manual_samples
-        update_visualization()
-
-        offset_ms = round(manual_ms, 2)
-        ref_file = ref_var.get()
-        target_name = "File 2" if ref_file == 1 else "File 1"
-
-        if offset_ms == 0:
-            res, color = "✓ Files perfectly synchronized!\nOffset: 0.00 ms", "#00ff88"
-        elif offset_ms > 0:
-            res = (f"⏱️ {target_name} IS DELAYED by {offset_ms} ms\n"
-                   f"→ Delay {target_name}: -{offset_ms} ms")
-            color = "#ffa500"
-        else:
-            res = (f"⏱️ {target_name} IS AHEAD by {abs(offset_ms)} ms\n"
-                   f"→ Delay {target_name}: +{abs(offset_ms)} ms")
-            color = "#ff6b6b"
-
-        label_result.config(text=res, fg=color)
-    except ValueError:
-        messagebox.showerror("Error", "Invalid offset value!")
-
-
-
-
 def export_drift_corrected() -> None:
     """
     Export drift-corrected audio in two steps to avoid container duration bugs:
@@ -1509,7 +1474,8 @@ def export_drift_corrected() -> None:
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name,bit_rate,channels,sample_rate",
              "-of", "json", target_path],
-            capture_output=True, text=True, startupinfo=get_startupinfo()
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo()
         )
         info = json.loads(probe.stdout)
         stream = info.get("streams", [{}])[0]
@@ -1668,48 +1634,6 @@ def export_drift_corrected() -> None:
 
     import threading as _thr
     _thr.Thread(target=_do_export, daemon=True).start()
-
-def zoom_in() -> None:
-    """Halve the zoom window width, centred on the current midpoint."""
-    if viz_data['data1'] is None:
-        return
-    current_range = viz_data['zoom_end'] - viz_data['zoom_start']
-    if current_range <= get_min_zoom_samples():
-        return
-    new_range = max(get_min_zoom_samples(), int(current_range * 0.5))
-    center = (viz_data['zoom_start'] + viz_data['zoom_end']) // 2
-    set_zoom_window(center, new_range)
-    update_visualization()
-
-
-def zoom_out() -> None:
-    """
-    Double the current zoom window width, centred on the current view midpoint.
-    No-op when already showing the full waveform or when no data is loaded.
-    """
-    if viz_data['data1'] is None:
-        return
-    current_range = viz_data['zoom_end'] - viz_data['zoom_start']
-    if current_range >= len(viz_data['data1']):
-        return
-    new_range = min(len(viz_data['data1']), int(current_range * 2))
-    center = (viz_data['zoom_start'] + viz_data['zoom_end']) // 2
-    set_zoom_window(center, new_range)
-    update_visualization()
-
-
-def reset_zoom() -> None:
-    """
-    Reset the zoom window to show the entire loaded waveform.
-    No-op when no data is loaded.
-    """
-    if viz_data['data1'] is None:
-        return
-    viz_data['zoom_start'] = 0
-    viz_data['zoom_end'] = len(viz_data['data1'])
-    update_visualization()
-
-
 
 def _maybe_load_timeline() -> None:
     """(Re)build the timeline as soon as both files are chosen."""
@@ -2823,17 +2747,27 @@ def shift_plan(plan: dict, delta_ms: float) -> dict:
 
 
 def measure_residual(ref_path: str, out_path: str,
-                     window: float = 40.0, step: float = 120.0):
+                     window: float = 40.0, step: float = 120.0, ref_array=None):
     """
     Measure what is left between the reference and a produced file.
 
     Decodes both, measures the offset along the timeline (envelope mode – the
     languages differ) and returns (median_ms, mad_ms, points).  Positive means
     the produced file is late.  Returns None when nothing usable was measured.
+
+    ref_array lets the caller hand over the reference it already has (the scan
+    keeps it in memory and on disk): re-reading a three-hour remux just to
+    verify an export is the slowest thing the program could do.
     """
-    ref, produced, _meta = decode_pair(ref_path, out_path)
+    if ref_array is None:
+        ref, produced, _meta = decode_pair(ref_path, out_path)
+    else:
+        ref = ref_array
+        _, produced = _decode_track(out_path, "res")
     points = scan_arrays(ref, produced, window=window, step=step, mode="envelope")
-    del ref, produced
+    del produced
+    if ref_array is None:
+        del ref
 
     offsets = [float(p["offset"]) for p in points if p.get("conf", 0) >= 1.0]
     if not offsets:
@@ -3389,6 +3323,7 @@ def chart_ylim(points, minimum_span: float = 60.0):
     the chart and the junk is clipped away.
     """
     values = np.asarray([float(p["offset"]) for p in points], dtype=float)
+    values = values[np.isfinite(values)]      # one NaN would poison the axis
     if values.size == 0:
         return None
     lo, hi = (float(v) for v in np.percentile(values, [5.0, 95.0]))
@@ -3468,7 +3403,8 @@ def _probe_audio_stream(path: str) -> dict:
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name,bit_rate,channels,sample_rate",
              "-of", "json", path],
-            capture_output=True, text=True, startupinfo=get_startupinfo())
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
         stream = (json.loads(probe.stdout).get("streams") or [{}])[0]
         if stream.get("codec_name"):
             info["codec"] = stream["codec_name"].lower()
@@ -3582,19 +3518,22 @@ def export_plan(plan: dict, target_path: str, out_path: str,
     encoder, _ext = _CODEC_MAP.get(info["codec"], ("ac3", ".ac3"))
     channels, sample_rate = info["channels"], info["sample_rate"]
 
-    probe_dur = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", target_path],
-        capture_output=True, text=True, startupinfo=get_startupinfo())
     try:
+        probe_dur = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", target_path],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
         target_duration = float(probe_dur.stdout.strip())
-    except ValueError:
+    except (subprocess.SubprocessError, OSError, ValueError):
         target_duration = float(plan.get("duration", 0.0))
 
     parts, out_label, used, notes = plan_to_filter(plan, target_duration)
     graph = ";".join(parts)
 
-    tmp_wav = os.path.join(tempfile.gettempdir(), "ads_plan_export.wav")
+    # unique per process: two exports at once must not write the same file
+    tmp_wav = os.path.join(tempfile.gettempdir(),
+                           f"ads_plan_export_{os.getpid()}_{time.time_ns()}.wav")
     cmd1 = ["ffmpeg", "-y", "-i", target_path, "-vn",
             "-filter_complex", graph, "-map", out_label,
             "-ac", str(channels), "-ar", str(sample_rate),
@@ -4270,7 +4209,8 @@ class TimelinePanel:
         self.last_residual = None
         self._post("status", "Checking the alignment of the exported file…")
         try:
-            residual = measure_residual(self.ref_path, out_path)
+            residual = measure_residual(self.ref_path, out_path,
+                                        ref_array=self.ref_data)
         except Exception as exc:
             console_log(f"Verification skipped: {exc}", "warn")
             residual = None
@@ -4285,9 +4225,10 @@ class TimelinePanel:
             self.plan = adjusted
             self._post("plan", adjusted)
             try:
-                residual = measure_residual(self.ref_path, out_path)
-            except Exception:
-                pass
+                residual = measure_residual(self.ref_path, out_path,
+                                            ref_array=self.ref_data)
+            except Exception as exc:
+                console_log(f"Verification skipped: {exc}", "warn")
 
         self.last_residual = residual
         if residual:
@@ -4559,6 +4500,13 @@ try:
 except Exception:                      # optional: drag and drop stays off
     DND_FILES = None
     TkinterDnD = None
+
+_INSTANCE = acquire_single_instance()
+if _INSTANCE is None:
+    show_message("Audio Desync Finder",
+                 "Audio Desync Finder is already running.\n"
+                 "Close the other window first.")
+    raise SystemExit(0)
 
 root = TkinterDnD.Tk() if TkinterDnD is not None else tk.Tk()
 if sv_ttk is not None:

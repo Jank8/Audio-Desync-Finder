@@ -134,6 +134,42 @@ _ffmpeg_procs = []
 _DECODE_MODE = {"value": "?"}     # what the last _decode_track actually used
 
 
+def acquire_single_instance(name: str = "AudioDesyncFinder"):
+    """
+    Hold a named Windows mutex for the life of the process.
+
+    Returns the handle (keep it alive) or None when another instance already
+    owns the name.  A second copy would fight the first one for the same files
+    and the same decoded-audio cache, and none of the UI is built for two.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool,
+                                          ctypes.c_wchar_p]
+        handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
+        if not handle:
+            return True                  # cannot tell - do not block the app
+        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            return None
+        return handle
+    except Exception:
+        return True
+
+
+def show_message(title: str, text: str) -> None:
+    """A message box for the moments before (or without) a GUI toolkit."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x40)
+    except Exception:
+        pass
+
+
 def get_startupinfo():
     if os.name == "nt":
         info = subprocess.STARTUPINFO()
@@ -141,21 +177,6 @@ def get_startupinfo():
         info.wShowWindow = subprocess.SW_HIDE
         return info
     return None
-
-
-def _run_ffmpeg(cmd, **kwargs):
-    proc = subprocess.Popen(cmd, **kwargs)
-    _ffmpeg_procs.append(proc)
-    try:
-        proc.communicate()
-    finally:
-        try:
-            _ffmpeg_procs.remove(proc)
-        except ValueError:
-            pass
-    if proc.returncode != 0 and proc.returncode not in (-9, -15, 1):
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
-    return subprocess.CompletedProcess(cmd, proc.returncode)
 
 
 def _run_ffmpeg_progress(cmd, total_s, pct_from, pct_to, report=None, should_stop=None):
@@ -298,7 +319,8 @@ def _get_file_duration(path: str) -> float:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, startupinfo=get_startupinfo())
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
         return float(result.stdout.strip())
     except Exception:
         return 0.0
@@ -907,17 +929,27 @@ def shift_plan(plan: dict, delta_ms: float) -> dict:
 
 
 def measure_residual(ref_path: str, out_path: str,
-                     window: float = 40.0, step: float = 120.0):
+                     window: float = 40.0, step: float = 120.0, ref_array=None):
     """
     Measure what is left between the reference and a produced file.
 
     Decodes both, measures the offset along the timeline (envelope mode – the
     languages differ) and returns (median_ms, mad_ms, points).  Positive means
     the produced file is late.  Returns None when nothing usable was measured.
+
+    ref_array lets the caller hand over the reference it already has (the scan
+    keeps it in memory and on disk): re-reading a three-hour remux just to
+    verify an export is the slowest thing the program could do.
     """
-    ref, produced, _meta = decode_pair(ref_path, out_path)
+    if ref_array is None:
+        ref, produced, _meta = decode_pair(ref_path, out_path)
+    else:
+        ref = ref_array
+        _, produced = _decode_track(out_path, "res")
     points = scan_arrays(ref, produced, window=window, step=step, mode="envelope")
-    del ref, produced
+    del produced
+    if ref_array is None:
+        del ref
 
     offsets = [float(p["offset"]) for p in points if p.get("conf", 0) >= 1.0]
     if not offsets:
@@ -969,14 +1001,6 @@ def format_residual(residual) -> str:
         action = "delay the audio" if delay > 0 else "advance the audio"
         text += f"\nmux delay {delay:+.0f} ms  ({action})"
     return text
-
-
-def plan_slope(plan) -> float:
-    """Representative drift rate of a plan (median of the segment slopes)."""
-    segments = plan.get("segments") or []
-    if not segments:
-        return 0.0
-    return float(np.median([float(s["slope"]) for s in segments]))
 
 
 def resample_track(data, rate: float):
@@ -1473,6 +1497,7 @@ def chart_ylim(points, minimum_span: float = 60.0):
     the chart and the junk is clipped away.
     """
     values = np.asarray([float(p["offset"]) for p in points], dtype=float)
+    values = values[np.isfinite(values)]      # one NaN would poison the axis
     if values.size == 0:
         return None
     lo, hi = (float(v) for v in np.percentile(values, [5.0, 95.0]))
@@ -1552,7 +1577,8 @@ def _probe_audio_stream(path: str) -> dict:
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name,bit_rate,channels,sample_rate",
              "-of", "json", path],
-            capture_output=True, text=True, startupinfo=get_startupinfo())
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
         stream = (json.loads(probe.stdout).get("streams") or [{}])[0]
         if stream.get("codec_name"):
             info["codec"] = stream["codec_name"].lower()
@@ -1666,19 +1692,22 @@ def export_plan(plan: dict, target_path: str, out_path: str,
     encoder, _ext = _CODEC_MAP.get(info["codec"], ("ac3", ".ac3"))
     channels, sample_rate = info["channels"], info["sample_rate"]
 
-    probe_dur = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", target_path],
-        capture_output=True, text=True, startupinfo=get_startupinfo())
     try:
+        probe_dur = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", target_path],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
         target_duration = float(probe_dur.stdout.strip())
-    except ValueError:
+    except (subprocess.SubprocessError, OSError, ValueError):
         target_duration = float(plan.get("duration", 0.0))
 
     parts, out_label, used, notes = plan_to_filter(plan, target_duration)
     graph = ";".join(parts)
 
-    tmp_wav = os.path.join(tempfile.gettempdir(), "ads_plan_export.wav")
+    # unique per process: two exports at once must not write the same file
+    tmp_wav = os.path.join(tempfile.gettempdir(),
+                           f"ads_plan_export_{os.getpid()}_{time.time_ns()}.wav")
     cmd1 = ["ffmpeg", "-y", "-i", target_path, "-vn",
             "-filter_complex", graph, "-map", out_label,
             "-ac", str(channels), "-ar", str(sample_rate),
@@ -1721,7 +1750,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.57"
+APP_VERSION = "3.0.58"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1741,13 +1770,6 @@ def system_is_light() -> bool:
             return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
     except Exception:
         return False
-
-
-def _lerp_colour(a: str, b: str, t: float) -> QColor:
-    ca, cb = QColor(a), QColor(b)
-    return QColor(int(ca.red() + (cb.red() - ca.red()) * t),
-                  int(ca.green() + (cb.green() - ca.green()) * t),
-                  int(ca.blue() + (cb.blue() - ca.blue()) * t))
 
 
 def build_icon(size: int = 256) -> QIcon:
@@ -2215,6 +2237,26 @@ class MainWindow(FluentWindow):
         else:
             self.log("Cache is already empty.")
 
+    def closeEvent(self, event):
+        """
+        Take the workers and FFmpeg down with the window.
+
+        Without this the child processes outlive the app: closing during a
+        decode left ten FFmpeg instances reading a 60 GB file in the
+        background, with no window left to stop them.
+        """
+        self.stop_event.set()
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        for proc in list(_ffmpeg_procs):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
     def _scan_task(self):
         try:
             ref_path, tgt_path = self._ordered_paths()
@@ -2299,6 +2341,22 @@ class MainWindow(FluentWindow):
             plan = build_plan(points, meta["ref_duration"],
                                      min_conf=self._num(self.entry_conf, 2),
                                      slope_hint=hint)
+            if plan.get("jumps") and not self.stop_event.is_set():
+                # the 40 s window blurs where an edit is; 6 s windows pin the
+                # cut down to a couple of seconds, and the cut is where the
+                # exported audio is spliced
+                self.ui_queue.put(("progress", (
+                    71, f"Refining {len(plan['jumps'])} jump position(s)…")))
+                extra_points = refine_breakpoints(
+                    ref, tgt, plan, meta["ref_duration"], mode=mode,
+                    should_stop=self.stop_event.is_set)
+                if extra_points:
+                    extra_points = compensate_points(extra_points, rate)
+                    points = sorted(points + extra_points, key=lambda p: p["t"])
+                    self.ui_queue.put(("points", points))
+                    plan = build_plan(points, meta["ref_duration"],
+                                      min_conf=self._num(self.entry_conf, 2),
+                                      slope_hint=hint)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
             for line in plan_report_lines(plan):
@@ -2325,7 +2383,7 @@ class MainWindow(FluentWindow):
 
     def _export_task(self, path):
         try:
-            _, tgt_path = self._ordered_paths()
+            ref_path, tgt_path = self._ordered_paths()
             export_plan(
                 self.plan, tgt_path, path,
                 progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
@@ -2333,32 +2391,35 @@ class MainWindow(FluentWindow):
                 should_stop=self.stop_event.is_set)
             self.ui_queue.put(("log", f"✓ Saved: {path}"))
             self.ui_queue.put(("notify", (path, True)))
-            if True:  # always verify and auto-align
-                ref_path = self._ordered_paths()[0]
-                self.ui_queue.put(("log", "Checking the alignment of the exported file…"))
-                residual = None
+            # the reference is already decoded - hand it over instead of
+            # reading the remux from disk again just to verify the export
+            cached = self.decoded if self.decoded.get("key") == decode_key(
+                ref_path, tgt_path) else {}
+            ref_array = cached.get("ref")
+            self.ui_queue.put(("log", "Checking the alignment of the exported file…"))
+            residual = None
+            try:
+                residual = measure_residual(ref_path, path, ref_array=ref_array)
+            except Exception as exc:
+                self.ui_queue.put(("log", f"Verification skipped: {exc}"))
+            if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
+                delta = residual[0]
+                self.ui_queue.put(("log", f"Residual {delta:+.1f} ms - re-exporting aligned…"))
+                adjusted = shift_plan(self.plan, delta)
+                export_plan(
+                    adjusted, tgt_path, path,
+                    progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
+                    log=lambda m, tag="info": self.ui_queue.put(("log", m)),
+                    should_stop=self.stop_event.is_set)
+                self.plan = adjusted
+                self.ui_queue.put(("plan", adjusted))
                 try:
-                    residual = measure_residual(ref_path, path)
+                    residual = measure_residual(ref_path, path, ref_array=ref_array)
                 except Exception as exc:
                     self.ui_queue.put(("log", f"Verification skipped: {exc}"))
-                if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
-                    delta = residual[0]
-                    self.ui_queue.put(("log", f"Residual {delta:+.1f} ms - re-exporting aligned…"))
-                    adjusted = shift_plan(self.plan, delta)
-                    export_plan(
-                        adjusted, tgt_path, path,
-                        progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
-                        log=lambda m, tag="info": self.ui_queue.put(("log", m)),
-                        should_stop=self.stop_event.is_set)
-                    self.plan = adjusted
-                    self.ui_queue.put(("plan", adjusted))
-                    try:
-                        residual = measure_residual(ref_path, path)
-                    except Exception:
-                        pass
-                if residual:
-                    for line in format_residual(residual).splitlines():
-                        self.ui_queue.put(("log", line))
+            if residual:
+                for line in format_residual(residual).splitlines():
+                    self.ui_queue.put(("log", line))
         except Exception as exc:
             self.ui_queue.put(("log", f"✗ Export failed: {exc}"))
         finally:
@@ -2606,8 +2667,17 @@ except Exception:
     pass
 
 
+_INSTANCE = None      # single-instance mutex handle, held until the process ends
+
+
 def main():
     global LIGHT
+    instance = acquire_single_instance()
+    if instance is None:
+        show_message("Audio Desync Finder",
+                     "Audio Desync Finder is already running.\n"
+                     "Close the other window first.")
+        return 0
     LIGHT = system_is_light()
     setTheme(Theme.LIGHT if LIGHT else Theme.DARK)
     setThemeColor(QColor(system_accent_hex()))
@@ -2615,6 +2685,8 @@ def main():
     win = MainWindow()
     win.show()
     QTimer.singleShot(500, win.check_ffmpeg)
+    global _INSTANCE
+    _INSTANCE = instance          # kept alive for the life of the process
     return app.exec()
 
 

@@ -74,7 +74,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.37"
+APP_VERSION = "2.0.38"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2288,7 +2288,7 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     out = os.path.join(tempfile.gettempdir(), f"ads_scan_{tag}_{os.getpid()}.wav")
     total = _get_file_duration(path) or 0.0
 
-    workers = _decode_workers()
+    workers = max(1, int(workers or _decode_workers()))
     if total >= 180 and workers > 1:
         data = _decode_parallel(path, sr, total, workers, on_fraction, should_stop)
         if len(data):
@@ -2340,7 +2340,8 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None):
     return rate, np.ascontiguousarray(data.astype(np.int16, copy=False))
 
 
-def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None):
+def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None,
+                workers=None):
     """
     Decode both files once and return (ref, target, meta).
 
@@ -2357,7 +2358,7 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
 
     if progress:
         progress("Decoding reference…")
-    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"))
+    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), workers=workers)
     if progress:
         progress("Decoding target…")
     _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"))

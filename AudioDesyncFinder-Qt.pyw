@@ -360,7 +360,7 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
 
 
 def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
-                  should_stop=None):
+                  should_stop=None, workers=None):
     """
     Decode the first audio stream of *path* to mono 16-bit PCM at *sr*.
 
@@ -373,7 +373,7 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
     out = os.path.join(tempfile.gettempdir(), f"ads_scan_{tag}_{os.getpid()}.wav")
     total = _get_file_duration(path) or 0.0
 
-    workers = _decode_workers()
+    workers = max(1, int(workers or _decode_workers()))
     if total >= 180 and workers > 1:
         data = _decode_parallel(path, sr, total, workers, on_fraction, should_stop)
         if len(data):
@@ -429,7 +429,7 @@ def _decode_track(path: str, tag: str, sr: int = SCAN_SR, on_fraction=None,
 
 
 def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None,
-                should_stop=None):
+                should_stop=None, workers=None):
     """
     Decode both files once and return (ref, target, meta).
 
@@ -446,10 +446,12 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
 
     if progress:
         progress("Decoding reference…")
-    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), should_stop=should_stop)
+    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), should_stop=should_stop,
+                     workers=workers)
     if progress:
         progress("Decoding target…")
-    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"), should_stop=should_stop)
+    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"), should_stop=should_stop,
+                     workers=workers)
     sr = SCAN_SR
     meta = {
         "sr": sr,
@@ -1416,7 +1418,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.37"
+APP_VERSION = "3.0.38"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -1693,6 +1695,16 @@ class MainWindow(FluentWindow):
         self.entry_conf.setAlignment(Qt.AlignCenter)
         self.entry_conf.setValidator(QDoubleValidator(0.5, 60.0, 2, self))
         sl.addWidget(self.entry_conf)
+        sl.addWidget(StrongBodyLabel("Cores"))
+        import os as _os
+        cores = max(1, (_os.cpu_count() or 4) - 2)
+        self.entry_cores = LineEdit()
+        self.entry_cores.setText(str(cores))
+        self.entry_cores.setFixedWidth(80)
+        self.entry_cores.setAlignment(Qt.AlignCenter)
+        self.entry_cores.setValidator(QIntValidator(1, max(1, _os.cpu_count() or 1), self))
+        self.entry_cores.setToolTip("Decoding threads; each one is a separate FFmpeg slice")
+        sl.addWidget(self.entry_cores)
         sl.addWidget(StrongBodyLabel("Signal"))
         self.combo_signal = ComboBox()
         self.combo_signal.addItems(["Auto", "Waveform", "Envelope"])
@@ -1894,7 +1906,8 @@ class MainWindow(FluentWindow):
                 on_fraction=lambda phase, f: self.ui_queue.put(
                     ("progress", (5 + (30 if phase == "ref" else 32) * f,
                                   f"Decoding {phase}… {f * 100:.0f}%"))),
-                should_stop=self.stop_event.is_set)
+                should_stop=self.stop_event.is_set,
+                workers=int(self._num(self.entry_cores, _decode_workers())))
             if self.stop_event.is_set():
                 self.ui_queue.put(("log", "Stopped by the user."))
                 return

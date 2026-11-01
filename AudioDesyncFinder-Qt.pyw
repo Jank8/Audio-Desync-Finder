@@ -1233,18 +1233,38 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # them.  The whole file has to vote as well.  The band scales with the
     # spread, so a real drift (wide spread) and a real edit (two plateaus,
     # wide MAD) stay intact while a burst three seconds away cannot survive.
+    #
+    # A long run far from the median is not a burst: a re-timed recap or a
+    # second master can sit half a second away for twenty minutes, so runs of
+    # FAR_RUN_POINTS consecutive points are kept whatever the band says.  The
+    # filter can therefore only ever remove short bursts.
+    FAR_RUN_POINTS = 20                     # about ten minutes at the usual step
     if len(usable) >= 8:
         values = np.array([float(p["offset"]) for p in usable])
         middle = float(np.median(values))
         spread = float(np.median(np.abs(values - middle)))
         band = max(500.0, 8.0 * 1.4826 * spread)
-        inside = [p for p in usable
-                  if abs(float(p["offset"]) - middle) <= band]
-        if 3 <= len(inside) < len(usable):
-            warnings.append(
-                f"Dropped {len(usable) - len(inside)} measurement(s) far "
-                "outside the offset the rest of the file shows.")
-            usable = inside
+        far = [abs(float(p["offset"]) - middle) > band for p in usable]
+        if any(far) and not all(far):
+            keep = [not flag for flag in far]
+            index = 0
+            while index < len(usable):
+                if not far[index]:
+                    index += 1
+                    continue
+                end = index
+                while end < len(usable) and far[end]:
+                    end += 1
+                if end - index >= FAR_RUN_POINTS:
+                    for position in range(index, end):
+                        keep[position] = True
+                index = end
+            inside = [p for p, wanted in zip(usable, keep) if wanted]
+            if 3 <= len(inside) < len(usable):
+                warnings.append(
+                    f"Dropped {len(usable) - len(inside)} measurement(s) far "
+                    "outside the offset the rest of the file shows.")
+                usable = inside
 
     # ---- 1. robust drift estimate over all consecutive gaps ---------------
     gap_slopes = []
@@ -1804,7 +1824,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.60"
+APP_VERSION = "3.0.61"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

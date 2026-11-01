@@ -310,7 +310,12 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
     only way to use the machine.  Each slice is decoded with half a second of
     overlap and trimmed to the exact sample count, so the joins are seamless.
     """
-    import concurrent.futures as futures
+    # Python 3.15 turns concurrent.futures.ThreadPoolExecutor into a lazy-import
+    # proxy that can stay unresolved inside this process (calling it raises
+    # "'lazy_import' object is not callable"), so the executor comes straight
+    # from its own module, which never goes through that proxy.
+    from concurrent.futures import as_completed
+    from concurrent.futures.thread import ThreadPoolExecutor
 
     chunk = total / workers
     parts = [None] * workers
@@ -343,9 +348,9 @@ def _decode_parallel(path: str, sr: int, total: float, workers: int,
             done = sum(1 for p in parts if p is not None)
             on_fraction(min(1.0, done / workers))
 
-    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         pending = [pool.submit(run, i) for i in range(workers)]
-        for fut in futures.as_completed(pending):
+        for fut in as_completed(pending):
             if should_stop is not None and should_stop():
                 for proc in list(_ffmpeg_procs):
                     try:
@@ -1418,7 +1423,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.43"
+APP_VERSION = "3.0.44"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

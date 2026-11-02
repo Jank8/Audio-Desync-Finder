@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.66"
+APP_VERSION = "2.0.67"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4264,14 +4264,10 @@ class TimelinePanel:
                 plan = build_plan(points, self.plan_duration,
                                   min_conf=self._conf(), slope_hint=hint)
 
-        used_env = sum(1 for p in points if p.get("mode") == "e")
         for line in plan_report_lines(plan):
             console_log(line, "ok")
         self._post("plan", plan)
-        self._post("status",
-                   f"Scan finished – {len(points)} points "
-                   f"({len(points) - used_env} waveform, {used_env} envelope), "
-                   f"atempo {1.0 + plan_slope(plan) / 1000.0:.8f}.")
+        self._post("status", "Measuring done")
         self._post("idle", None)
 
     def _task_measure(self, t_center: float) -> None:

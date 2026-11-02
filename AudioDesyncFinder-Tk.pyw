@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.64"
+APP_VERSION = "2.0.65"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2096,7 +2096,7 @@ ENVELOPE_CONF_SCALE = 2.0     # envelope peaks are broader, so their prominence
 # A drift is only "noise" if it stays below this over the whole segment.  The
 # limit cannot be a rate: 0.06 ms/s is nothing over a minute and 350 ms over a
 # two-hour film.
-FLAT_DRIFT_MS = 25.0
+FLAT_DRIFT_MS = 40.0
 
 # codec -> (ffmpeg encoder, container extension)
 _CODEC_MAP = {
@@ -3386,9 +3386,14 @@ def mux_delay_ms(plan):
     segments = plan.get("segments") or []
     if len(segments) != 1 or plan.get("jumps"):
         return None
-    if abs(float(segments[0]["slope"])) >= 0.05:
+    segment = segments[0]
+    span = max(1.0, float(segment["t_end"]) - float(segment["t_start"]))
+    # the same rule the model uses to flatten a segment: a drift that adds up
+    # to less than FLAT_DRIFT_MS over the whole file is invisible, and a single
+    # delay covers it.  Anything above that needs the exported file.
+    if abs(float(segment["slope"])) * span >= FLAT_DRIFT_MS:
         return None
-    return -float(plan.get("initial_offset", segments[0]["offset"]))
+    return -float(plan.get("initial_offset", segment["offset"]))
 
 
 def mux_hint(plan) -> str:

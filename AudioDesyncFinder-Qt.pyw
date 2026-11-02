@@ -1003,6 +1003,14 @@ def format_residual(residual) -> str:
     return text
 
 
+def plan_slope(plan) -> float:
+    """Representative drift rate of a plan (median of the segment slopes)."""
+    segments = plan.get("segments") or []
+    if not segments:
+        return 0.0
+    return float(np.median([float(s["slope"]) for s in segments]))
+
+
 def resample_track(data, rate: float):
     """
     Resample a whole track by *rate* (> 1 = faster / shorter).
@@ -1868,7 +1876,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.65"
+APP_VERSION = "3.0.66"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2479,6 +2487,11 @@ class MainWindow(FluentWindow):
             self.ui_queue.put(("plan", plan))
             for line in plan_report_lines(plan):
                 self.ui_queue.put(("log", line))
+            used_env = sum(1 for point in points if point.get("mode") == "e")
+            self.ui_queue.put(("progress", (
+                100, f"Scan finished – {len(points)} points "
+                     f"({len(points) - used_env} waveform, {used_env} envelope), "
+                     f"atempo {1.0 + plan_slope(plan) / 1000.0:.8f}")))
         except Exception as exc:
             self.ui_queue.put(("log", f"✗ {exc}"))
         finally:

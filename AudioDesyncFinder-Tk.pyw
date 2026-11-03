@@ -2948,6 +2948,23 @@ def shift_track_by_ms(track, delta_ms: float):
     return track
 
 
+FPS_SAME_TOLERANCE = 0.01     # 23.976000 vs 23.976024 is the same rate
+
+
+def framerate_differs(fps_ref: float, fps_tgt: float) -> bool:
+    """
+    True when the two rates differ by more than floating-point noise.
+
+    Two releases of the same film both show "23.976", but one may report
+    23.976000 and the other 23.976024 - a difference of 0.00002 fps, or
+    0.0001 %.  Treating that as a tempo difference fits a drift out of noise.
+    The cut-off is 0.01 fps (0.04 %), still far below anything audible.
+    """
+    if not fps_ref or not fps_tgt:
+        return False
+    return abs(float(fps_ref) - float(fps_tgt)) >= FPS_SAME_TOLERANCE
+
+
 def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
     """
     Drift the durations imply, cross-checked against the framerates.
@@ -2965,7 +2982,7 @@ def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
     dur_tgt = _get_file_duration(tgt_path)
 
     if not (dur_ref > 60 and dur_tgt > 60):
-        if fps_ref and fps_tgt and abs(fps_ref - fps_tgt) > 1e-9:
+        if framerate_differs(fps_ref, fps_tgt):
             return framerate_slope(fps_ref, fps_tgt)
         return None
 
@@ -2976,7 +2993,7 @@ def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
         return None                      # far too big for a speed change
 
     from_ratio = (length_ratio - 1.0) * 1000.0
-    if not (fps_ref and fps_tgt) or abs(fps_ref - fps_tgt) < 1e-9:
+    if not framerate_differs(fps_ref, fps_tgt):
         return None                      # same framerate: the gap is an edit
     fps_ratio = fps_ref / fps_tgt
     if abs(length_ratio - fps_ratio) < 0.02:
@@ -4220,8 +4237,7 @@ class TimelinePanel:
         fps_ref = probe_framerate(self.ref_path)
         fps_tgt = probe_framerate(self.target_path)
         self.allow_drift = (self.var_tempo.get()
-                            or bool(fps_ref and fps_tgt
-                                    and abs(fps_ref - fps_tgt) > 1e-9))
+                            or framerate_differs(fps_ref, fps_tgt))
 
         # A known framerate ratio lets the scan start already compensated.
         # Without it a PAL-style 43 ms/s difference smears the peak so badly

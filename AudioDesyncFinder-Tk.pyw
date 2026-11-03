@@ -2912,7 +2912,13 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
         ys = np.array([p["offset"] for p in pts], dtype=float)
         if float(ts.max() - ts.min()) <= 0.5:
             break
-        slope, intercept = np.polyfit(ts, ys, 1)
+        if allow_slope:
+            slope, intercept = np.polyfit(ts, ys, 1)
+        else:
+            # the refit after dropping outliers must respect the same rule:
+            # fitting a slope here silently undid the forced level
+            slope = float(fallback_slope)
+            intercept = float(np.median(ys - slope * ts))
         resid = ys - (slope * ts + intercept)
 
     rms = float(np.sqrt(np.mean(resid ** 2))) if len(resid) else 0.0

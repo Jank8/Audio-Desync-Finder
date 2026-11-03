@@ -1594,14 +1594,19 @@ def mux_hint(plan) -> str:
     delay = mux_delay_ms(plan)
     if delay is None:
         blockers = []
-        drift = float(segments[0]["slope"])
-        if abs(drift) >= 0.05:
-            blockers.append(f"drift {drift:+.2f} ms/s")
+        if len(segments) > 1:
+            blockers.append(f"{len(segments)} segments")
         jumps = plan.get("jumps") or []
         if jumps:
             blockers.append(f"{len(jumps)} edit point{'s' if len(jumps) > 1 else ''}")
         if not blockers:
-            blockers.append("no straight line")
+            # one straight line, but it drifts too far for a constant delay:
+            # say how far, instead of claiming there is no line at all
+            segment = segments[0]
+            span = max(1.0, float(segment["t_end"]) - float(segment["t_start"]))
+            total = abs(float(segment["slope"])) * span
+            blockers.append(f"drift {float(segment['slope']):+.3f} ms/s, "
+                            f"{total:.0f} ms over the film")
         return ("Mux by hand: no single delay can fix this ("
                 + ", ".join(blockers) + ") - export the corrected audio.")
 
@@ -1876,7 +1881,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.67"
+APP_VERSION = "3.0.68"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

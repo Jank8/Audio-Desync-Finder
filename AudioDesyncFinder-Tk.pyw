@@ -4797,8 +4797,14 @@ try:
     root.iconphoto(True, *_icons)
 except Exception:
     pass
-root.geometry("1680x940")
+root.geometry("1500x940")
 root.minsize(1180, 700)
+# centre on the screen the window is about to appear on
+root.update_idletasks()
+_win_w, _win_h = 1500, 940
+_screen_w, _screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+root.geometry(f"{_win_w}x{_win_h}+{max(0, (_screen_w - _win_w) // 2)}"
+              f"+{max(0, (_screen_h - _win_h) // 2)}")
 root.configure(bg="#1a1a1a")
 root.resizable(True, True)
 

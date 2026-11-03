@@ -2100,7 +2100,7 @@ class MainWindow(FluentWindow):
             self.titleBar.iconLabel.setContentsMargins(0, 0, 0, 0)
         except Exception:
             pass
-        self.resize(1240, 860)
+        self.resize(1500, 860)
         self.setMicaEffectEnabled(True)
         self.setAcceptDrops(True)      # a drop anywhere fills the first empty field
         self.setMinimumSize(1000, 640)
@@ -2404,6 +2404,21 @@ class MainWindow(FluentWindow):
             self.log(f"Cache cleared: {removed} file(s), {freed / 1e6:.0f} MB freed.")
         else:
             self.log("Cache is already empty.")
+
+    def showEvent(self, event):
+        """Centre the window once, after the frame size is known."""
+        super().showEvent(event)
+        if not getattr(self, "_centred", False):
+            self._centred = True
+            QTimer.singleShot(0, self._centre_on_screen)
+
+    def _centre_on_screen(self):
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        frame = self.frameGeometry()
+        frame.moveCenter(screen.availableGeometry().center())
+        self.move(frame.topLeft())
 
     def closeEvent(self, event):
         """

@@ -3303,14 +3303,14 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
 
 
     # ---- 4c. say it out loud when almost nothing survived ---------------
-    # A model fitted to five points out of two hundred looks just as confident
-    # on screen as one fitted to all of them.
+    # Two points can be fitted perfectly and still mean nothing.  A high
+    # count is not required (Min confidence 4 legitimately keeps a fifth of
+    # the measurements), only enough of them to make the fit an average.
     fitted_points = sum(int(seg["n"]) for seg in segments)
-    if fitted_points < 10 or fitted_points * 3 < len(points):
+    if fitted_points < 10:
         warnings.append(
-            f"Only {fitted_points} of {len(points)} measurements survived the "
-            "filters - raise Min confidence or switch Signal before trusting "
-            "this model.")
+            f"The model rests on {fitted_points} of {len(points)} measurements "
+            "- lower Min confidence or switch Signal before trusting it.")
 
     # ---- 5. optional: lock the drift to a known framerate ratio -----------
     if slope_hint is not None:

@@ -3815,7 +3815,7 @@ class TimelinePanel:
 
         self.var_window = _spin(row, "Window (s):", 40, 6, 5)
         self.var_step = _spin(row, "Step (s):", 30, 6, 5)
-        self.var_conf = _spin(row, "Min confidence:", 2.0, 5, 0.5)
+        self.var_conf = _spin(row, "Min confidence:", 4.0, 5, 0.5)
         _cores_default = max(1, (os.cpu_count() or 4) - 2)
         self.var_cores = _spin(row, "Cores:", _cores_default, 4, 1)
 
@@ -4143,7 +4143,7 @@ class TimelinePanel:
         return self._num(self.var_step, 30.0, 2.0, 180.0)
 
     def _conf(self) -> float:
-        return self._num(self.var_conf, 2.0, 0.5, 50.0)
+        return self._num(self.var_conf, 4.0, 0.5, 50.0)
 
     def _mode(self) -> str:
         """Selected comparison mode: auto / waveform / envelope."""

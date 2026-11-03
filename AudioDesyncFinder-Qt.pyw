@@ -2201,7 +2201,7 @@ class MainWindow(FluentWindow):
         sl.addWidget(self.entry_step)
         sl.addWidget(StrongBodyLabel("Min confidence"))
         self.entry_conf = LineEdit()
-        self.entry_conf.setText("2")
+        self.entry_conf.setText("4")
         self.entry_conf.setFixedWidth(110)
         self.entry_conf.setAlignment(Qt.AlignCenter)
         self.entry_conf.setValidator(QDoubleValidator(0.5, 60.0, 2, self))
@@ -2549,7 +2549,7 @@ class MainWindow(FluentWindow):
                 for point in points:
                     point["offset"] = round(point["offset"] + coarse, 2)
             plan = build_plan(points, meta["ref_duration"],
-                                     min_conf=self._num(self.entry_conf, 2),
+                                     min_conf=self._num(self.entry_conf, 4),
                                      slope_hint=hint, allow_drift=allow_drift)
             if plan.get("jumps") and not self.stop_event.is_set():
                 # the 40 s window blurs where an edit is; 6 s windows pin the
@@ -2565,7 +2565,7 @@ class MainWindow(FluentWindow):
                     points = sorted(points + extra_points, key=lambda p: p["t"])
                     self.ui_queue.put(("points", points))
                     plan = build_plan(points, meta["ref_duration"],
-                                      min_conf=self._num(self.entry_conf, 2),
+                                      min_conf=self._num(self.entry_conf, 4),
                                       slope_hint=hint, allow_drift=allow_drift)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
@@ -2829,7 +2829,7 @@ class MainWindow(FluentWindow):
             return
         del self.points[row]
         plan = build_plan(self.points, self.meta["ref_duration"],
-                                 min_conf=self._num(self.entry_conf, 2),
+                                 min_conf=self._num(self.entry_conf, 4),
                                  slope_hint=self._fps_hint(),
                                  allow_drift=getattr(self, "allow_drift", True))
         self.plan = plan

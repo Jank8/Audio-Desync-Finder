@@ -2993,10 +2993,11 @@ def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
         return None
 
     length_ratio = dur_ref / dur_tgt
-    if abs(length_ratio - 1.0) < 0.005:
-        return None                      # same running time: no speed change
     if abs(length_ratio - 1.0) > 0.08:
         return None                      # far too big for a speed change
+    # A 0.1 % difference (24 vs 23.976) is six seconds across a film, so it
+    # is not "the same running time": the framerate check below decides
+    # whether it is a speed change or a different edit.
 
     from_ratio = (length_ratio - 1.0) * 1000.0
     if not framerate_differs(fps_ref, fps_tgt):
@@ -3300,12 +3301,26 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                 f"Dropped {dropped} segment(s) the measurements do not support.")
             segments = cleaned
 
+
+    # ---- 4c. say it out loud when almost nothing survived ---------------
+    # A model fitted to five points out of two hundred looks just as confident
+    # on screen as one fitted to all of them.
+    fitted_points = sum(int(seg["n"]) for seg in segments)
+    if fitted_points < 10 or fitted_points * 3 < len(points):
+        warnings.append(
+            f"Only {fitted_points} of {len(points)} measurements survived the "
+            "filters - raise Min confidence or switch Signal before trusting "
+            "this model.")
+
     # ---- 5. optional: lock the drift to a known framerate ratio -----------
     if slope_hint is not None:
         tolerance = max(0.5, abs(slope_hint) * 0.10)
         locked = 0
         for seg in segments:
-            if abs(seg["slope"] - slope_hint) <= tolerance:
+            # a segment resting on a handful of points cannot justify its
+            # own slope, so the known ratio wins over the fitted one
+            weak = seg["n"] < 20
+            if abs(seg["slope"] - slope_hint) <= tolerance or weak:
                 # keep the value at the segment centre, rotate the line to the
                 # exact ratio: the centre is the most reliable point of a fit
                 centre = 0.5 * (seg["t_start"] + seg["t_end"])

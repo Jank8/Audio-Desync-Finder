@@ -101,11 +101,11 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
                                QHBoxLayout, QLabel, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from qfluentwidgets import (BodyLabel, CardWidget, ComboBox, FluentWindow,
-                            InfoBar, InfoBarPosition, LineEdit, MessageBox,
-                            PrimaryPushButton, ProgressBar, PushButton,
-                            RadioButton, SpinBox, StrongBodyLabel, TableWidget,
-                            TextEdit, Theme, setTheme, setThemeColor)
+from qfluentwidgets import (BodyLabel, CardWidget, CheckBox, ComboBox,
+                            FluentWindow, InfoBar, InfoBarPosition, LineEdit,
+                            MessageBox, PrimaryPushButton, ProgressBar,
+                            PushButton, RadioButton, SpinBox, StrongBodyLabel,
+                            TableWidget, TextEdit, Theme, setTheme, setThemeColor)
 
 import shutil
 
@@ -1047,7 +1047,8 @@ def compensate_points(points, rate: float):
     return out
 
 
-def _fit_group(group, fallback_slope: float, outlier_ms: float):
+def _fit_group(group, fallback_slope: float, outlier_ms: float,
+               allow_slope: bool = True):
     """
     Robust straight line through one group of points.
 
@@ -1067,7 +1068,8 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
     # A short group cannot carry its own slope: two points always look
     # perfectly straight and five noisy ones invent a tempo.  Anything shorter
     # than ten minutes takes the file's trend and fits only its own level.
-    if len(pts) >= 6 and span > 600.0:
+    # allow_slope=False (equal framerates, Tempo unticked) forces a level.
+    if allow_slope and len(pts) >= 6 and span > 600.0:
         slopes = []
         for a in range(len(pts)):
             for b in range(a + 1, len(pts)):
@@ -1204,7 +1206,8 @@ def _drop_local_outliers(points, limit_ms: float = 400.0, radius: int = 4,
 
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
-               merge_ms: float = 60.0, slope_hint: float = None):
+               merge_ms: float = 60.0, slope_hint: float = None,
+               allow_drift: bool = True):
     """
     Fit a piecewise-linear offset model to the measured points.
 
@@ -1297,7 +1300,19 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # Theil-Sen already answered this above; the median of gap slopes is only
     # the fallback for a file too short to fit a line.  A real PAL drift reads
     # +41.7 ms/s, so only something beyond 100 ms/s (10 % tempo) is nonsense.
-    base_slope = trend_slope
+    #
+    # allow_drift=False means both files report the same framerate: a tempo
+    # difference has nowhere to come from, so the model is forced to levels and
+    # only the offset (plus real edits) survives.  The Tempo checkbox turns
+    # this back on for the rare case that ignores that rule.
+    base_slope = trend_slope if allow_drift else 0.0
+    if not allow_drift:
+        warnings.append("Tempo not fitted - both files report the same framerate "
+                        "(tick Tempo to look for a drift anyway).")
+        if trend_slope is not None and abs(trend_slope) * float(duration) > 200.0:
+            warnings.append(
+                f"... but the points drift {trend_slope * float(duration):+.0f} ms "
+                "over the film - tick Tempo if that is real.")
     if base_slope is None:
         gap_slopes = []
         for p, q in zip(usable, usable[1:]):
@@ -1356,7 +1371,8 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # ---- 3. fit each group, then merge groups that describe the same line -
     fits = []
     for group in groups:
-        slope, intercept, kept, rms = _fit_group(group, base_slope, outlier_ms)
+        slope, intercept, kept, rms = _fit_group(group, base_slope, outlier_ms,
+                                                 allow_drift)
         if len(kept) < len(group):
             # the range, not the first point: the outliers are spread over the
             # whole group, and "near t=20s" made it look local
@@ -1380,7 +1396,7 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                     and abs(right["slope"] - left["slope"]) < 0.2):
                 combined = left["kept"] + right["kept"]
                 slope, intercept, kept, rms = _fit_group(
-                    combined, left["slope"], outlier_ms)
+                    combined, left["slope"], outlier_ms, allow_drift)
                 fits[i:i + 2] = [{"slope": slope, "intercept": intercept,
                                   "kept": kept, "rms": rms, "n": len(kept)}]
                 merged = True
@@ -1881,7 +1897,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.68"
+APP_VERSION = "3.0.69"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2166,6 +2182,10 @@ class MainWindow(FluentWindow):
         self.combo_signal = ComboBox()
         self.combo_signal.addItems(["Auto", "Waveform", "Envelope"])
         sl.addWidget(self.combo_signal)
+        self.chk_tempo = CheckBox("Tempo")
+        self.chk_tempo.setToolTip(
+            "Fit a drift even when both files report the same framerate")
+        sl.addWidget(self.chk_tempo)
         sl.addStretch(1)
         self.btn_scan = PrimaryPushButton("⚡  Auto-scan whole file")
         self.btn_scan.clicked.connect(self.start_scan)
@@ -2435,6 +2455,13 @@ class MainWindow(FluentWindow):
                     else "envelope")
             step = self._num(self.entry_step, 30)
             hint = self._fps_hint()
+            # a tempo difference needs a framerate difference to exist at all;
+            # the checkbox covers the rare file that ignores that rule
+            fps_ref, fps_tgt = probe_framerate(ref_path), probe_framerate(tgt_path)
+            allow_drift = (self.chk_tempo.isChecked()
+                           or bool(fps_ref and fps_tgt
+                                   and abs(fps_ref - fps_tgt) > 1e-9))
+            self.allow_drift = allow_drift
             rate = 1.0 + hint / 1000.0 if hint and abs(hint) >= 0.3 else 1.0
             if rate != 1.0:
                 self.ui_queue.put(("progress", (
@@ -2471,7 +2498,7 @@ class MainWindow(FluentWindow):
                     point["offset"] = round(point["offset"] + coarse, 2)
             plan = build_plan(points, meta["ref_duration"],
                                      min_conf=self._num(self.entry_conf, 2),
-                                     slope_hint=hint)
+                                     slope_hint=hint, allow_drift=allow_drift)
             if plan.get("jumps") and not self.stop_event.is_set():
                 # the 40 s window blurs where an edit is; 6 s windows pin the
                 # cut down to a couple of seconds, and the cut is where the
@@ -2487,7 +2514,7 @@ class MainWindow(FluentWindow):
                     self.ui_queue.put(("points", points))
                     plan = build_plan(points, meta["ref_duration"],
                                       min_conf=self._num(self.entry_conf, 2),
-                                      slope_hint=hint)
+                                      slope_hint=hint, allow_drift=allow_drift)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
             for line in plan_report_lines(plan):
@@ -2751,7 +2778,8 @@ class MainWindow(FluentWindow):
         del self.points[row]
         plan = build_plan(self.points, self.meta["ref_duration"],
                                  min_conf=self._num(self.entry_conf, 2),
-                                 slope_hint=self._fps_hint())
+                                 slope_hint=self._fps_hint(),
+                                 allow_drift=getattr(self, "allow_drift", True))
         self.plan = plan
         self.model_view.setPlainText("\n".join(plan_lines(plan)[:10]))
         self._update_summary()

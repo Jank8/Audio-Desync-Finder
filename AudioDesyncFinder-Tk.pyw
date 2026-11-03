@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.68"
+APP_VERSION = "2.0.69"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2865,7 +2865,8 @@ def compensate_points(points, rate: float):
     return out
 
 
-def _fit_group(group, fallback_slope: float, outlier_ms: float):
+def _fit_group(group, fallback_slope: float, outlier_ms: float,
+               allow_slope: bool = True):
     """
     Robust straight line through one group of points.
 
@@ -2885,7 +2886,8 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float):
     # A short group cannot carry its own slope: two points always look
     # perfectly straight and five noisy ones invent a tempo.  Anything shorter
     # than ten minutes takes the file's trend and fits only its own level.
-    if len(pts) >= 6 and span > 600.0:
+    # allow_slope=False (equal framerates, Tempo unticked) forces a level.
+    if allow_slope and len(pts) >= 6 and span > 600.0:
         slopes = []
         for a in range(len(pts)):
             for b in range(a + 1, len(pts)):
@@ -3022,7 +3024,8 @@ def _drop_local_outliers(points, limit_ms: float = 400.0, radius: int = 4,
 
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
-               merge_ms: float = 60.0, slope_hint: float = None):
+               merge_ms: float = 60.0, slope_hint: float = None,
+               allow_drift: bool = True):
     """
     Fit a piecewise-linear offset model to the measured points.
 
@@ -3115,7 +3118,19 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # Theil-Sen already answered this above; the median of gap slopes is only
     # the fallback for a file too short to fit a line.  A real PAL drift reads
     # +41.7 ms/s, so only something beyond 100 ms/s (10 % tempo) is nonsense.
-    base_slope = trend_slope
+    #
+    # allow_drift=False means both files report the same framerate: a tempo
+    # difference has nowhere to come from, so the model is forced to levels and
+    # only the offset (plus real edits) survives.  The Tempo checkbox turns
+    # this back on for the rare case that ignores that rule.
+    base_slope = trend_slope if allow_drift else 0.0
+    if not allow_drift:
+        warnings.append("Tempo not fitted - both files report the same framerate "
+                        "(tick Tempo to look for a drift anyway).")
+        if trend_slope is not None and abs(trend_slope) * float(duration) > 200.0:
+            warnings.append(
+                f"... but the points drift {trend_slope * float(duration):+.0f} ms "
+                "over the film - tick Tempo if that is real.")
     if base_slope is None:
         gap_slopes = []
         for p, q in zip(usable, usable[1:]):
@@ -3174,7 +3189,8 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # ---- 3. fit each group, then merge groups that describe the same line -
     fits = []
     for group in groups:
-        slope, intercept, kept, rms = _fit_group(group, base_slope, outlier_ms)
+        slope, intercept, kept, rms = _fit_group(group, base_slope, outlier_ms,
+                                                 allow_drift)
         if len(kept) < len(group):
             # the range, not the first point: the outliers are spread over the
             # whole group, and "near t=20s" made it look local
@@ -3198,7 +3214,7 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                     and abs(right["slope"] - left["slope"]) < 0.2):
                 combined = left["kept"] + right["kept"]
                 slope, intercept, kept, rms = _fit_group(
-                    combined, left["slope"], outlier_ms)
+                    combined, left["slope"], outlier_ms, allow_drift)
                 fits[i:i + 2] = [{"slope": slope, "intercept": intercept,
                                   "kept": kept, "rms": rms, "n": len(kept)}]
                 merged = True
@@ -3780,6 +3796,14 @@ class TimelinePanel:
                                    font=("Segoe UI", 8))
         signal_menu.pack(side=tk.LEFT, padx=(0, 12))
 
+        # tempo: only fitted when the framerates differ, unless forced
+        self.var_tempo = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            row, text="Tempo", variable=self.var_tempo, bg=BG_PANEL,
+            fg=FG_DIM, selectcolor=BG_INPUT, bd=0, highlightthickness=0,
+            activebackground=BG_PANEL, activeforeground="#ffffff",
+            font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 12))
+
         # optional framerate hint – turns a noisy measured drift into the exact
         # ratio and lets the scan start already compensated (PAL/NTSC cases)
         fps_row = tk.Frame(bar, bg=BG_PANEL)
@@ -4152,7 +4176,8 @@ class TimelinePanel:
         # min(duration) here would cut the last minutes off the exported audio.
         span = meta["ref_duration"] if rate != 1.0 else meta["duration"]
         self.plan_duration = span
-        plan = build_plan(points, span, min_conf=self._conf(), slope_hint=hint)
+        plan = build_plan(points, span, min_conf=self._conf(), slope_hint=hint,
+                          allow_drift=getattr(self, "allow_drift", True))
         return points, plan
 
     def _task_scan(self) -> None:
@@ -4190,6 +4215,13 @@ class TimelinePanel:
 
         window, step, mode = self._window(), self._step(), self._mode()
         hint = self._fps_slope()
+        # a tempo difference needs a framerate difference to exist at all;
+        # the checkbox covers the rare file that ignores that rule
+        fps_ref = probe_framerate(self.ref_path)
+        fps_tgt = probe_framerate(self.target_path)
+        self.allow_drift = (self.var_tempo.get()
+                            or bool(fps_ref and fps_tgt
+                                    and abs(fps_ref - fps_tgt) > 1e-9))
 
         # A known framerate ratio lets the scan start already compensated.
         # Without it a PAL-style 43 ms/s difference smears the peak so badly
@@ -4251,7 +4283,8 @@ class TimelinePanel:
         if coarse:
             points = [dict(p, offset=round(p["offset"] + coarse, 2)) for p in points]
             plan = build_plan(points, self.plan_duration,
-                              min_conf=self._conf(), slope_hint=hint)
+                              min_conf=self._conf(), slope_hint=hint,
+                              allow_drift=getattr(self, "allow_drift", True))
 
         self.tgt_data, self.scan_rate = scan_tgt, scan_rate
         tgt = scan_tgt
@@ -4267,7 +4300,8 @@ class TimelinePanel:
                 points = sorted(points + extra_points, key=lambda p: p["t"])
                 self._post("scan_points", points)
                 plan = build_plan(points, self.plan_duration,
-                                  min_conf=self._conf(), slope_hint=hint)
+                                  min_conf=self._conf(), slope_hint=hint,
+                                  allow_drift=getattr(self, "allow_drift", True))
 
         for line in plan_report_lines(plan):
             console_log(line, "ok")
@@ -4301,7 +4335,9 @@ class TimelinePanel:
             # the arrays may hold the drift-compensated target
             result = compensate_points([result], self.scan_rate)[0]
         self._post("new_point", result)
-        self._post("plan", build_plan(self.points, duration, min_conf=self._conf(), slope_hint=self._fps_slope()))
+        self._post("plan", build_plan(self.points, duration, min_conf=self._conf(),
+                                     slope_hint=self._fps_slope(),
+                                     allow_drift=getattr(self, "allow_drift", True)))
         self._post("status",
                    f"Measured at {result['t']:.1f}s: {result['offset']:+.2f} ms "
                    f"(confidence {result['conf']:.1f}, "
@@ -4389,7 +4425,8 @@ class TimelinePanel:
         self._refresh_points()
         if self.meta:
             self.plan = build_plan(self.points, self.plan_duration, slope_hint=self._fps_slope(),
-                                   min_conf=self._conf())
+                                   min_conf=self._conf(),
+                                   allow_drift=getattr(self, "allow_drift", True))
             self._refresh_plan()
         self.status_var.set(f"Added manual point at {t:.2f}s: {offset:+.2f} ms")
 
@@ -4430,7 +4467,8 @@ class TimelinePanel:
         if self.meta is None:
             return
         self.plan = build_plan(self.points, self.plan_duration, slope_hint=self._fps_slope(),
-                               min_conf=self._conf())
+                               min_conf=self._conf(),
+                               allow_drift=getattr(self, "allow_drift", True))
         self._refresh_plan()
 
     def export_audio(self) -> None:

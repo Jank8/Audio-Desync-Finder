@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.72"
+APP_VERSION = "2.0.73"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3483,13 +3483,57 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             f"{len(segments)} segments for {used_points} points – the measurements "
             "are probably noisy; raise Min confidence or delete the outliers.")
 
+    # ---- 7. does the target still look like the same cut? ----------------
+    # Two edits in one film, or a drift of seconds across it, is not a badly
+    # timed dub - it is a different cut, a re-timed master or a track that was
+    # rebuilt for another release.  No offset model repairs that, so the UI says
+    # so in large type instead of leaving it in the small print.
+    fitted_drift = sum(
+        abs(float(seg["slope"])) * max(1.0, float(seg["t_end"]) - float(seg["t_start"]))
+        for seg in segments)
+    trend_drift = abs(float(trend_slope or 0.0)) * float(duration)
+    drift_ms = max(fitted_drift, trend_drift)
+    worst_rms = max((float(seg["rms"]) for seg in segments), default=0.0)
+    if len(jumps) >= 2 or drift_ms >= 1500.0 or worst_rms > 80.0:
+        plan_mismatch = {"edits": len(jumps), "drift_ms": round(drift_ms, 1),
+                         "rms": round(worst_rms, 1)}
+    else:
+        plan_mismatch = None
+
     return {
         "segments": segments,
         "jumps": jumps,
         "initial_offset": segments[0]["offset"] if segments else 0.0,
         "warnings": warnings,
         "duration": float(duration),
+        "mismatch": plan_mismatch,
     }
+
+
+def mismatch_text(plan) -> str:
+    """
+    One loud sentence when the target is not the same cut, else "".
+
+    Kept apart from build_plan so both UIs print the same words, and so the
+    text can be shown in large type instead of the 9 pt model report.
+    """
+    info = (plan or {}).get("mismatch")
+    if not info:
+        return ""
+    parts = []
+    edits = int(info.get("edits") or 0)
+    if edits:
+        parts.append(f"{edits} cut{'s' if edits > 1 else ''}")
+    drift = float(info.get("drift_ms") or 0.0)
+    if abs(drift) >= 200.0:
+        parts.append(f"{drift / 1000.0:+.1f} s of drift")
+    if float(info.get("rms") or 0.0) > 80.0:
+        parts.append(f"RMS {float(info['rms']):.0f} ms")
+    detail = " (" + ", ".join(parts) + ")" if parts else ""
+    return ("The target's audio differs a lot from the reference" + detail +
+            ". A different release of the target is recommended.")
+
+
 
 
 def plan_lines(plan) -> list:
@@ -4077,10 +4121,21 @@ class TimelinePanel:
             self.seg_tree.column(col, width=width, anchor=anchor, stretch=False)
         self.seg_tree.pack(fill=tk.X, padx=8, pady=6)
 
+        # loud, because "use another release" is not advice for 8 pt type
+        self.mismatch_var = tk.StringVar(value="")
+        self.mismatch_lbl = tk.Label(
+            seg_box, textvariable=self.mismatch_var, bg=BG_PANEL, fg="#e6a23c",
+            font=("Segoe UI", 12, "bold"), justify=tk.LEFT, anchor=tk.W,
+            wraplength=1000)
+        self.mismatch_lbl.pack(fill=tk.X, padx=10, pady=(6, 0))
+        self.mismatch_lbl.pack_forget()
+
         self.summary_var = tk.StringVar(value="")
-        tk.Label(seg_box, textvariable=self.summary_var, bg=BG_PANEL, fg="#999999",
-                 font=("Segoe UI", 8), justify=tk.LEFT, anchor=tk.W).pack(
-            fill=tk.X, padx=10, pady=(0, 8))
+        self.summary_lbl = tk.Label(seg_box, textvariable=self.summary_var,
+                                    bg=BG_PANEL, fg="#999999",
+                                    font=("Segoe UI", 8), justify=tk.LEFT,
+                                    anchor=tk.W)
+        self.summary_lbl.pack(fill=tk.X, padx=10, pady=(0, 8))
 
         self.mux_var = tk.StringVar(value="")
         self.mux_lbl = tk.Label(seg_box, textvariable=self.mux_var, bg=BG_PANEL,
@@ -4672,6 +4727,13 @@ class TimelinePanel:
     def _refresh_plan(self) -> None:
         self.seg_tree.delete(*self.seg_tree.get_children())
         plan = self.plan or {}
+        notice = mismatch_text(plan)
+        self.mismatch_var.set(notice)
+        if notice:
+            self.mismatch_lbl.pack(fill=tk.X, padx=10, pady=(6, 0),
+                                   before=self.summary_lbl)
+        else:
+            self.mismatch_lbl.pack_forget()
         for i, seg in enumerate(plan.get("segments") or []):
             self.seg_tree.insert("", tk.END, values=(
                 i + 1, f"{seg['t_start']:.1f}", f"{seg['t_end']:.1f}",

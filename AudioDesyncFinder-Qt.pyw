@@ -1665,13 +1665,57 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             f"{len(segments)} segments for {used_points} points – the measurements "
             "are probably noisy; raise Min confidence or delete the outliers.")
 
+    # ---- 7. does the target still look like the same cut? ----------------
+    # Two edits in one film, or a drift of seconds across it, is not a badly
+    # timed dub - it is a different cut, a re-timed master or a track that was
+    # rebuilt for another release.  No offset model repairs that, so the UI says
+    # so in large type instead of leaving it in the small print.
+    fitted_drift = sum(
+        abs(float(seg["slope"])) * max(1.0, float(seg["t_end"]) - float(seg["t_start"]))
+        for seg in segments)
+    trend_drift = abs(float(trend_slope or 0.0)) * float(duration)
+    drift_ms = max(fitted_drift, trend_drift)
+    worst_rms = max((float(seg["rms"]) for seg in segments), default=0.0)
+    if len(jumps) >= 2 or drift_ms >= 1500.0 or worst_rms > 80.0:
+        plan_mismatch = {"edits": len(jumps), "drift_ms": round(drift_ms, 1),
+                         "rms": round(worst_rms, 1)}
+    else:
+        plan_mismatch = None
+
     return {
         "segments": segments,
         "jumps": jumps,
         "initial_offset": segments[0]["offset"] if segments else 0.0,
         "warnings": warnings,
         "duration": float(duration),
+        "mismatch": plan_mismatch,
     }
+
+
+def mismatch_text(plan) -> str:
+    """
+    One loud sentence when the target is not the same cut, else "".
+
+    Kept apart from build_plan so both UIs print the same words, and so the
+    text can be shown in large type instead of the 9 pt model report.
+    """
+    info = (plan or {}).get("mismatch")
+    if not info:
+        return ""
+    parts = []
+    edits = int(info.get("edits") or 0)
+    if edits:
+        parts.append(f"{edits} cut{'s' if edits > 1 else ''}")
+    drift = float(info.get("drift_ms") or 0.0)
+    if abs(drift) >= 200.0:
+        parts.append(f"{drift / 1000.0:+.1f} s of drift")
+    if float(info.get("rms") or 0.0) > 80.0:
+        parts.append(f"RMS {float(info['rms']):.0f} ms")
+    detail = " (" + ", ".join(parts) + ")" if parts else ""
+    return ("The target's audio differs a lot from the reference" + detail +
+            ". A different release of the target is recommended.")
+
+
 
 
 def plan_lines(plan) -> list:
@@ -2022,7 +2066,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.72"
+APP_VERSION = "3.0.73"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2360,6 +2404,14 @@ class MainWindow(FluentWindow):
         ml = QVBoxLayout(model_card)
         ml.setContentsMargins(14, 10, 14, 12)
         ml.addWidget(StrongBodyLabel("Fitted model"))
+        # loud, because "use another release" is not advice that belongs in 9 pt
+        self.mismatch_label = BodyLabel("")
+        self.mismatch_label.setWordWrap(True)
+        self.mismatch_label.setStyleSheet(
+            "BodyLabel{color:#E6A23C;font-size:15px;font-weight:600;"
+            "padding:6px 0px;}")
+        self.mismatch_label.hide()
+        ml.addWidget(self.mismatch_label)
         self.summary = StrongBodyLabel("")
         ml.addWidget(self.summary)
         self.mux_label = BodyLabel("")
@@ -2745,6 +2797,9 @@ class MainWindow(FluentWindow):
             elif kind == "plan":
                 self.plan = payload
                 self.model_view.setPlainText("\n".join(plan_lines(payload)[:10]))
+                notice = mismatch_text(payload)
+                self.mismatch_label.setText(notice)
+                self.mismatch_label.setVisible(bool(notice))
                 if not payload.get("segments"):
                     best = max((float(p.get("conf", 0.0)) for p in self.points), default=0.0)
                     self.model_view.setPlainText(
@@ -2921,6 +2976,9 @@ class MainWindow(FluentWindow):
                                  allow_drift=getattr(self, "allow_drift", True))
         self.plan = plan
         self.model_view.setPlainText("\n".join(plan_lines(plan)[:10]))
+        notice = mismatch_text(plan)
+        self.mismatch_label.setText(notice)
+        self.mismatch_label.setVisible(bool(notice))
         self._update_summary()
         self._draw()
         self._fill_table()

@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.73 / 2.0.73
+
+- **A loud notice when the target is not the same cut.** Two or more edits, a
+  drift of 1.5 s or more across the film, or a fit worse than 80 ms RMS now
+  prints in 15 px amber above the model report, not in the 9 pt fine print:
+  "The target's audio differs a lot from the reference (2 cuts, +5.5 s of
+  drift). A different release of the target is recommended."
+- The sentence comes from `mismatch_text(plan)`, so both builds word it the same.
+
 ## 3.0.72 / 2.0.72
 
 - **The split is followed by a merge.** Splitting a segment for a rescued run

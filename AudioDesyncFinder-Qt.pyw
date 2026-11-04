@@ -1228,6 +1228,31 @@ def _drop_local_outliers(points, limit_ms: float = 400.0, radius: int = 4,
     return kept if len(kept) >= 3 else points
 
 
+def _merge_same_line(segments, merge_ms: float):
+    """
+    Join neighbouring segments that describe the same straight line.
+
+    Used twice: once after the groups are fitted, and once after the rescue
+    pass, because splitting a segment can leave two pieces on the same line -
+    a leftover piece two points wide produces a 0.6 ms "jump" and a pointless
+    audio cut at the seam.
+    """
+    if len(segments) < 2:
+        return segments
+    merged = [segments[0]]
+    for seg in segments[1:]:
+        prev = merged[-1]
+        boundary = seg["t_start"]
+        prev_at = prev["offset"] + prev["slope"] * (boundary - prev["t_start"])
+        if (abs(seg["offset"] - prev_at) < merge_ms
+                and abs(seg["slope"] - prev["slope"]) < 0.05):
+            prev["t_end"] = seg["t_end"]
+            prev["n"] += seg["n"]
+            prev["rms"] = round(max(prev["rms"], seg["rms"]), 2)
+        else:
+            merged.append(seg)
+    return merged
+
 def build_plan(points, duration: float, min_conf: float = 2.0,
                jump_ms: float = 150.0, outlier_ms: float = 120.0,
                merge_ms: float = 60.0, slope_hint: float = None,
@@ -1520,20 +1545,7 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     # ---- 5b. drop segments that are just one line split in three ---------
     # Locking the slope can make neighbouring segments identical; keeping them
     # apart would add pointless audio cuts at the seams.
-    if len(segments) > 1:
-        merged_segments = [segments[0]]
-        for seg in segments[1:]:
-            prev = merged_segments[-1]
-            boundary = seg["t_start"]
-            prev_at = prev["offset"] + prev["slope"] * (boundary - prev["t_start"])
-            if (abs(seg["offset"] - prev_at) < merge_ms
-                    and abs(seg["slope"] - prev["slope"]) < 0.05):
-                prev["t_end"] = seg["t_end"]
-                prev["n"] += seg["n"]
-                prev["rms"] = round(max(prev["rms"], seg["rms"]), 2)
-            else:
-                merged_segments.append(seg)
-        segments = merged_segments
+    segments = _merge_same_line(segments, merge_ms)
 
     # ---- 5c. tiny drifts are noise: keep the segment flat ----------------
     # The cut-off is the drift accumulated over the whole segment, not a rate:
@@ -1616,6 +1628,10 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             warnings.append(
                 f"Added {rescued} segment(s) from measurements the fit had dropped "
                 "(a re-cut or a different dub later in the film).")
+
+        # a split leaves the pieces to be rejoined when they landed on the same
+        # line, otherwise the leftover produces a 0.6 ms jump and an audio cut
+        segments = _merge_same_line(segments, merge_ms)
 
     # ---- 6. jumps + sanity warnings --------------------------------------
     jumps = []
@@ -2006,7 +2022,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.71"
+APP_VERSION = "3.0.72"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

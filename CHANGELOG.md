@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.72 / 2.0.72
+
+- **The split is followed by a merge.** Splitting a segment for a rescued run
+  can leave a piece on the same line as its neighbour - two points are enough to
+  produce a `+0.6 ms -> skip audio` cut at the seam. The merge that used to run
+  before the rescue now runs after it too, so the leftover is joined back and
+  the pointless edit disappears.
+
 ## 3.0.71 / 2.0.71
 
 - **The rescue split refits its pieces from their own measurements.** A piece

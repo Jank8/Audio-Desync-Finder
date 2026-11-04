@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.75 / 2.0.75
+
+- **A segment no longer claims time it has no measurements for.** When the
+  points that support a segment stop early - the last fifteen minutes of a dub
+  that sits at another level, measured below Min confidence - the tail becomes
+  a segment of its own, placed from those weaker measurements and marked
+  `weak` so it is not merged back into the line above it. The log says so:
+  "Split 1 unsupported tail(s) off using the measurements below Min
+  confidence."
+- If nothing usable exists there, the segment keeps covering the film: a
+  truncated model would cut the exported audio.
+
 ## 3.0.74 / 2.0.74
 
 - the "different cut" notice uses the system accent colour instead of a fixed

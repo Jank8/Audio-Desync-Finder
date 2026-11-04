@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.74"
+APP_VERSION = "2.0.75"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3063,7 +3063,8 @@ def _merge_same_line(segments, merge_ms: float):
         boundary = seg["t_start"]
         prev_at = prev["offset"] + prev["slope"] * (boundary - prev["t_start"])
         if (abs(seg["offset"] - prev_at) < merge_ms
-                and abs(seg["slope"] - prev["slope"]) < 0.05):
+                and abs(seg["slope"] - prev["slope"]) < 0.05
+                and not seg.get("weak") and not prev.get("weak")):
             prev["t_end"] = seg["t_end"]
             prev["n"] += seg["n"]
             prev["rms"] = round(max(prev["rms"], seg["rms"]), 2)
@@ -3375,6 +3376,42 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         if abs(float(seg["slope"])) * span < FLAT_DRIFT_MS:
             seg["slope"] = 0.0
             seg["atempo"] = 1.0
+
+    # ---- 5f. no segment may claim time it has no measurements for --------
+    # A group can absorb the ones after it, so a segment's t_end can reach past
+    # its last measurement: the chart then draws a line where nothing supports
+    # it and the export applies a level nobody measured.  The tail gets its own
+    # segment from the points that do exist there - including the ones below
+    # Min confidence, which are still good enough to place a level.
+    weak_pool = [p for p in points
+                 if p.get("enabled", True) and float(p.get("conf", 0.0)) < min_conf]
+    tails = []
+    for seg in segments:
+        own = [p for p in usable if seg["t_start"] <= p["t"] <= seg["t_end"]]
+        if not own:
+            continue
+        last = max(float(p["t"]) for p in own)
+        if seg["t_end"] - last <= 120.0:
+            continue
+        tail = [p for p in weak_pool if last < p["t"] <= seg["t_end"]]
+        values = np.array([float(p["offset"]) for p in tail]) if tail else np.array([])
+        level = float(np.median(values)) if len(values) else 0.0
+        spread = float(np.median(np.abs(values - level))) if len(values) else 1e9
+        if (len(tail) < 8 or spread > 50.0
+                or float(tail[-1]["t"]) - float(tail[0]["t"]) < 120.0):
+            # nothing good enough to place a level: leave the segment covering
+            # the film - a truncated model would cut the exported audio
+            continue
+        start = last + 30.0
+        seg["t_end"] = start
+        tails.append({"t_start": start, "t_end": float(tail[-1]["t"]) + 30.0,
+                      "offset": level, "slope": 0.0, "atempo": 1.0,
+                      "n": len(tail), "rms": round(spread, 2), "weak": True})
+    if tails:
+        segments = sorted(segments + tails, key=lambda s: float(s["t_start"]))
+        warnings.append(
+            f"Split {len(tails)} unsupported tail(s) off using the measurements "
+            "below Min confidence.")
 
     # ---- 5d. rescue long runs of measurements the fit threw away ---------
     # A dub that is re-cut late in the film appears as a tight band of points a

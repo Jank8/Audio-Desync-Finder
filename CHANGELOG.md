@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.77 / 2.0.77
+
+- **The decode cache is per file, not per pair.** Scanning A against B and then
+  A against C used to decode A twice, because the cache key held both paths.
+  Each track is now keyed by its own name, size and modification time, so any
+  file decoded once is never read again, whatever it is paired with. The log
+  says `Reference: 5777 s of audio from the cache`.
+- **The manual-mux line is no longer fine print**: 13 px semibold in the accent
+  colour in Qt, 11 pt bold in Tk.
+
 ## 3.0.76 / 2.0.76
 
 - **The weak level at the end gets a segment even when the strong points still

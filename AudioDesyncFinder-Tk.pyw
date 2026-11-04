@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.76"
+APP_VERSION = "2.0.77"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2369,53 +2369,57 @@ def decode_pair(path_ref: str, path_target: str, progress=None, on_fraction=None
             return None
         return lambda frac: on_fraction(phase, frac)
 
-    if progress:
-        progress("Decoding reference…")
-    started = time.time()
-    _, ref = _decode_track(path_ref, "ref", on_fraction=report("ref"), should_stop=should_stop,
-                     workers=workers)
-    if progress:
-        progress(f"Reference: {len(ref) / float(SCAN_SR):.0f} s of audio in "
-                 f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
-    if progress:
-        progress("Decoding target…")
-    started = time.time()
-    _, tgt = _decode_track(path_target, "tgt", on_fraction=report("target"), should_stop=should_stop,
-                     workers=workers)
-    if progress:
-        progress(f"Target: {len(tgt) / float(SCAN_SR):.0f} s of audio in "
-                 f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
+    ref = _track_from_cache_or_disk(path_ref, "ref", "Reference", progress,
+                                    report, should_stop, workers)
+    tgt = _track_from_cache_or_disk(path_target, "tgt", "Target", progress,
+                                    report, should_stop, workers)
     return ref, tgt, pair_meta(ref, tgt)
 
 
-def decode_key(ref_path: str, tgt_path: str):
+def _track_from_cache_or_disk(path, role, label, progress, report, should_stop,
+                              workers):
+    """One decoded track: from the cache when that file was decoded before."""
+    key = track_key(path)
+    started = time.time()
+    cached = load_cached_track(key)
+    if cached is not None:
+        if progress:
+            progress(f"{label}: {len(cached) / float(SCAN_SR):.0f} s of audio "
+                     "from the cache")
+        return cached
+    if progress:
+        progress(f"Decoding {label.lower()}…")
+    _, data = _decode_track(path, role, on_fraction=report(role),
+                            should_stop=should_stop, workers=workers)
+    if progress:
+        progress(f"{label}: {len(data) / float(SCAN_SR):.0f} s of audio in "
+                 f"{time.time() - started:.1f} s ({_DECODE_MODE['value']})")
+    save_cached_track(key, data)
+    return data
+
+
+def track_key(path: str):
     """
-    Identity of a file pair on disk, so a re-scan can reuse the decoded PCM.
+    Identity of one file on disk, so its decoded PCM can be reused.
 
     Decoding is the expensive part of a scan - minutes of reading a slow disk -
     and Window, Step, Min confidence, Signal or Cores do not change a single
-    sample of it.  Name, size and modification time are enough to notice that a
-    file was replaced in the meantime.
+    sample of it.  The cache is per file, not per pair: the same reference
+    against a third target is still a cache hit.  Name, size and modification
+    time are enough to notice that the file was replaced meanwhile.
     """
     try:
-        ref_stat = os.stat(ref_path)
-        tgt_stat = os.stat(tgt_path)
+        stat = os.stat(path)
     except OSError:
         return None
-    return (str(ref_path), ref_stat.st_mtime_ns, ref_stat.st_size,
-            str(tgt_path), tgt_stat.st_mtime_ns, tgt_stat.st_size)
-
-
-def pair_fits_cache(ref, tgt, hours: float = 8.0) -> bool:
-    """Keep a decoded pair in memory only while it is reasonably small."""
-    return (len(ref) + len(tgt)) <= hours * 3600.0 * SCAN_SR
+    return (str(path), stat.st_mtime_ns, stat.st_size)
 
 
 # Decoded audio outlives the process: two raw 16 kHz tracks on disk, so the
 # next session does not go back to the remux.  Reading 700 MB sequentially
 # beats decoding a 60 GB file by an order of magnitude.
 CACHE_LIMIT_BYTES = 2 * 1024 ** 3        # 2 GB of decoded audio
-CACHE_KEEP_FILES = 2                     # one pair: reference and target
+CACHE_KEEP_FILES = 4                     # two pairs, per file
 
 
 def _cache_dir() -> str:
@@ -2423,9 +2427,9 @@ def _cache_dir() -> str:
     return os.path.join(base, "AudioDesyncFinder", "cache")
 
 
-def _cache_file(key, role: str) -> str:
+def _cache_file(key) -> str:
     digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
-    return os.path.join(_cache_dir(), f"{role}-{digest}.pcm")
+    return os.path.join(_cache_dir(), f"track-{digest}.pcm")
 
 
 def pair_meta(ref, tgt) -> dict:
@@ -2439,40 +2443,36 @@ def pair_meta(ref, tgt) -> dict:
     }
 
 
-def load_cached_pair(key):
-    """The pair an earlier session decoded, or None."""
+def load_cached_track(key):
+    """The decoded track an earlier scan wrote, or None."""
     if key is None:
         return None
-    ref_file, tgt_file = _cache_file(key, "ref"), _cache_file(key, "tgt")
+    path = _cache_file(key)
     try:
-        if not (os.path.isfile(ref_file) and os.path.isfile(tgt_file)):
+        if not os.path.isfile(path):
             return None
-        ref = np.fromfile(ref_file, dtype=np.int16)
-        tgt = np.fromfile(tgt_file, dtype=np.int16)
+        data = np.fromfile(path, dtype=np.int16)
     except OSError:
         return None
-    if len(ref) < SCAN_SR or len(tgt) < SCAN_SR:
+    if len(data) < SCAN_SR:
         return None
-    now = time.time()
-    for path in (ref_file, tgt_file):
-        try:
-            os.utime(path, (now, now))   # the pruner keeps what was used last
-        except OSError:
-            pass
-    return ref, tgt
+    try:
+        os.utime(path, None)             # the pruner keeps what was used last
+    except OSError:
+        pass
+    return data
 
 
-def save_cached_pair(key, ref, tgt) -> None:
-    """Write both tracks for the next session and keep the cache under its cap."""
-    if key is None or (len(ref) + len(tgt)) * 2 > CACHE_LIMIT_BYTES:
+def save_cached_track(key, data) -> None:
+    """Write one decoded track for the next session and keep the cache under its cap."""
+    if key is None or len(data) * 2 > CACHE_LIMIT_BYTES:
         return
     try:
         os.makedirs(_cache_dir(), exist_ok=True)
-        for role, data in (("ref", ref), ("tgt", tgt)):
-            path = _cache_file(key, role)
-            temp = path + ".tmp"
-            data.tofile(temp)
-            os.replace(temp, path)
+        path = _cache_file(key)
+        temp = path + ".tmp"
+        data.tofile(temp)
+        os.replace(temp, path)
     except OSError:
         return
     _prune_cache()
@@ -4204,8 +4204,8 @@ class TimelinePanel:
 
         self.mux_var = tk.StringVar(value="")
         self.mux_lbl = tk.Label(seg_box, textvariable=self.mux_var, bg=BG_PANEL,
-                                fg=FG_ACCENT, font=("Segoe UI", 9, "bold"),
-                                justify=tk.LEFT, anchor=tk.W, wraplength=960)
+                                fg=FG_ACCENT, font=("Segoe UI", 11, "bold"),
+                                justify=tk.LEFT, anchor=tk.W, wraplength=1000)
         self.mux_lbl.pack(fill=tk.X, padx=10, pady=(0, 8))
 
         # ---- footer ------------------------------------------------------
@@ -4429,32 +4429,23 @@ class TimelinePanel:
         console_log("── Timeline scan started ─────────────────────", "bold")
         self._post("status", "Decoding audio…")
         self._scan_t0 = time.time()
-        key = decode_key(self.ref_path, self.target_path)
-        if key is not None and key == self._decoded_key and self.ref_data is not None:
+        pair_key = (track_key(self.ref_path), track_key(self.target_path))
+        if pair_key == self._decoded_key and self.ref_data is not None:
             ref, tgt, meta = self.ref_data, self.tgt_data, self.meta
             console_log("Reusing the audio decoded for the previous scan - only "
                         "the settings changed.", "info")
             self._post("progress", (68.0, "Using the cached audio…"))
         else:
             self.ref_data = self.tgt_data = None   # free before decoding the new one
-            stored = load_cached_pair(key)
-            if stored is not None:
-                ref, tgt = stored
-                meta = pair_meta(ref, tgt)
-                console_log("Loaded the audio decoded by an earlier session from "
-                            "the cache.", "info")
-                self._post("progress", (68.0, "Loading the cached audio…"))
-            else:
-                ref, tgt, meta = decode_pair(
-                    self.ref_path, self.target_path,
-                    progress=lambda msg: self._post("status", msg),
-                    on_fraction=self._decode_fraction,
-                    should_stop=self.stop_event.is_set,
-                    workers=int(self._num(self.var_cores, 4, 1, 64)))
-                if not self.stop_event.is_set():
-                    self._post("progress", (68.0, "Saving the decoded audio…"))
-                    save_cached_pair(key, ref, tgt)
-            self._decoded_key = key if pair_fits_cache(ref, tgt) else None
+            # decode_pair reads and writes the per-file cache itself, so a file
+            # already decoded for any earlier pair is never read again
+            ref, tgt, meta = decode_pair(
+                self.ref_path, self.target_path,
+                progress=lambda msg: self._post("status", msg),
+                on_fraction=self._decode_fraction,
+                should_stop=self.stop_event.is_set,
+                workers=int(self._num(self.var_cores, 4, 1, 64)))
+            self._decoded_key = pair_key
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
 

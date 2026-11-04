@@ -3,6 +3,12 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.74 / 2.0.74
+
+- the "different cut" notice uses the system accent colour instead of a fixed
+  amber - the same accent the window already highlights with (`#f7630c` here),
+  and `FG_ACCENT` in the Tk build.
+
 ## 3.0.73 / 2.0.73
 
 - **A loud notice when the target is not the same cut.** Two or more edits, a

@@ -2066,7 +2066,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.73"
+APP_VERSION = "3.0.74"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2408,8 +2408,8 @@ class MainWindow(FluentWindow):
         self.mismatch_label = BodyLabel("")
         self.mismatch_label.setWordWrap(True)
         self.mismatch_label.setStyleSheet(
-            "BodyLabel{color:#E6A23C;font-size:15px;font-weight:600;"
-            "padding:6px 0px;}")
+            f"BodyLabel{{color:{system_accent_hex()};font-size:15px;"
+            "font-weight:600;padding:6px 0px;}")
         self.mismatch_label.hide()
         ml.addWidget(self.mismatch_label)
         self.summary = StrongBodyLabel("")

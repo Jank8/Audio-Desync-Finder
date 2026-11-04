@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.73"
+APP_VERSION = "2.0.74"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4124,7 +4124,7 @@ class TimelinePanel:
         # loud, because "use another release" is not advice for 8 pt type
         self.mismatch_var = tk.StringVar(value="")
         self.mismatch_lbl = tk.Label(
-            seg_box, textvariable=self.mismatch_var, bg=BG_PANEL, fg="#e6a23c",
+            seg_box, textvariable=self.mismatch_var, bg=BG_PANEL, fg=FG_ACCENT,
             font=("Segoe UI", 12, "bold"), justify=tk.LEFT, anchor=tk.W,
             wraplength=1000)
         self.mismatch_lbl.pack(fill=tk.X, padx=10, pady=(6, 0))

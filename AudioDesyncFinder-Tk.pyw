@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.75"
+APP_VERSION = "2.0.76"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3407,11 +3407,39 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         tails.append({"t_start": start, "t_end": float(tail[-1]["t"]) + 30.0,
                       "offset": level, "slope": 0.0, "atempo": 1.0,
                       "n": len(tail), "rms": round(spread, 2), "weak": True})
+    # The last segment can also cover a stretch where the weak measurements sit
+    # on a level of their own: a dub that changes speed or splices in a reel at
+    # the end leaves the strong points agreeing with the old line and the rest
+    # of the film half a frame away.  If those weak points are tight and long
+    # enough, they are a segment too - the model is meant to be complete.
+    if segments and weak_pool:
+        last_seg = segments[-1]
+        span = max(1.0, float(last_seg["t_end"]) - float(last_seg["t_start"]))
+        mid = float(last_seg["t_start"]) + 0.75 * span
+        run = [p for p in weak_pool
+               if mid <= p["t"] <= last_seg["t_end"]]
+        if len(run) >= 8 and float(run[-1]["t"]) - float(run[0]["t"]) >= 120.0:
+            values = np.array([float(p["offset"]) for p in run])
+            level = float(np.median(values))
+            spread = float(np.median(np.abs(values - level)))
+            at_start = float(last_seg["offset"]) + float(last_seg["slope"]) * (
+                float(run[0]["t"]) - float(last_seg["t_start"]))
+            if spread <= 50.0 and abs(level - at_start) >= 25.0:
+                start = float(run[0]["t"])
+                tail_seg = {"t_start": start,
+                            "t_end": float(last_seg["t_end"]),
+                            "offset": level, "slope": 0.0, "atempo": 1.0,
+                            "n": len(run), "rms": round(spread, 2), "weak": True}
+                last_seg["t_end"] = start
+                segments.append(tail_seg)
+                tails.append(tail_seg)
+                warnings.append(
+                    f"Split {1} unsupported tail(s) off using the measurements "
+                    "below Min confidence.")
+
     if tails:
-        segments = sorted(segments + tails, key=lambda s: float(s["t_start"]))
-        warnings.append(
-            f"Split {len(tails)} unsupported tail(s) off using the measurements "
-            "below Min confidence.")
+        segments = sorted(segments + [s for s in tails if s not in segments],
+                          key=lambda s: float(s["t_start"]))
 
     # ---- 5d. rescue long runs of measurements the fit threw away ---------
     # A dub that is re-cut late in the film appears as a tight band of points a

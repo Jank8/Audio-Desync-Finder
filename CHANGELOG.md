@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.76 / 2.0.76
+
+- **The weak level at the end gets a segment even when the strong points still
+  reach the end.** 3.0.75 only split a tail when the supporting points stopped
+  early; here they run to the end while the measurements below Min confidence
+  sit ~35 ms away for the last fifteen minutes. Those weak points now split the
+  last segment when they are tight (8+ points, 120 s+, spread <= 50 ms) and at
+  least 25 ms away from the line.
+- Measured: strong 494 with a weak 460 tail -> `0-2115 / 2115-4900 / 4900-5776
+  (weak)`; a film without weak points still gives one segment.
+
 ## 3.0.75 / 2.0.75
 
 - **A segment no longer claims time it has no measurements for.** When the

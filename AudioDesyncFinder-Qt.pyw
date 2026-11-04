@@ -1546,6 +1546,63 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             seg["slope"] = 0.0
             seg["atempo"] = 1.0
 
+    # ---- 5d. rescue long runs of measurements the fit threw away ---------
+    # A dub that is re-cut late in the film appears as a tight band of points a
+    # second or two away from the model.  The segment fit calls them outliers,
+    # so the model keeps drawing the old line to the end and the export drifts
+    # for the rest of the film.  A run that is long, tight and far from every
+    # segment is not noise: it is a segment of its own, and the segment that
+    # covers it gets split around it.
+    if segments and len(usable) >= 12:
+        def _model_at(point):
+            for seg in segments:
+                if seg["t_start"] - 1.0 <= point["t"] <= seg["t_end"] + 1.0:
+                    return seg["offset"] + seg["slope"] * (point["t"] - seg["t_start"])
+            nearest = min(segments, key=lambda s: abs(point["t"] - s["t_start"]))
+            return nearest["offset"]
+
+        unexplained = [p for p in usable
+                       if abs(p["offset"] - _model_at(p)) > outlier_ms]
+        runs, current = [], []
+        for point in unexplained:
+            if current and point["t"] - current[-1]["t"] > 240.0:
+                runs.append(current)
+                current = []
+            current.append(point)
+        if current:
+            runs.append(current)
+
+        rescued = 0
+        for run in runs:
+            values = np.array([float(p["offset"]) for p in run])
+            level = float(np.median(values))
+            spread = float(np.median(np.abs(values - level)))
+            start, end = float(run[0]["t"]), float(run[-1]["t"])
+            if (len(run) < 12 or end - start < 240.0 or spread > 50.0
+                    or len(run) < 0.15 * len(usable)):
+                continue
+            for index, seg in enumerate(segments):
+                if not (seg["t_start"] + 1.0 <= start and end <= seg["t_end"] - 1.0):
+                    continue
+                middle = {"t_start": start, "t_end": end, "offset": level,
+                          "slope": 0.0, "atempo": 1.0, "n": len(run),
+                          "rms": round(spread, 2), "locked": True}
+                pieces = []
+                if start - seg["t_start"] > 30.0:
+                    pieces.append(dict(seg, t_end=start))
+                pieces.append(middle)
+                if seg["t_end"] - end > 30.0:
+                    tail = dict(seg, t_start=end)
+                    tail["offset"] = seg["offset"] + seg["slope"] * (end - seg["t_start"])
+                    pieces.append(tail)
+                segments[index:index + 1] = pieces
+                rescued += 1
+                break
+        if rescued:
+            warnings.append(
+                f"Added {rescued} segment(s) from measurements the fit had dropped "
+                "(a re-cut or a different dub later in the film).")
+
     # ---- 6. jumps + sanity warnings --------------------------------------
     jumps = []
     for prev, cur in zip(segments, segments[1:]):

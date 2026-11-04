@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.70"
+APP_VERSION = "2.0.71"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3405,14 +3405,28 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                 middle = {"t_start": start, "t_end": end, "offset": level,
                           "slope": 0.0, "atempo": 1.0, "n": len(run),
                           "rms": round(spread, 2), "locked": True}
-                pieces = []
-                if start - seg["t_start"] > 30.0:
-                    pieces.append(dict(seg, t_end=start))
-                pieces.append(middle)
-                if seg["t_end"] - end > 30.0:
-                    tail = dict(seg, t_start=end)
-                    tail["offset"] = seg["offset"] + seg["slope"] * (end - seg["t_start"])
-                    pieces.append(tail)
+                # A piece that has no measurements of its own must not inherit
+                # the parent line: that is how the model ended up drawing 13778
+                # over the last fifteen minutes while the points sat at 16000.
+                def _piece(from_t, to_t, is_middle):
+                    own = [p for p in usable if from_t <= p["t"] <= to_t]
+                    if not is_middle and len(own) < 2:
+                        return None
+                    if is_middle:
+                        return dict(middle, t_start=from_t, t_end=to_t)
+                    values = np.array([float(p["offset"]) for p in own])
+                    piece_level = float(np.median(values))
+                    return {"t_start": from_t, "t_end": to_t, "offset": piece_level,
+                            "slope": float(seg["slope"]),
+                            "atempo": 1.0 + float(seg["slope"]) / 1000.0,
+                            "n": len(own),
+                            "rms": round(float(np.median(np.abs(values - piece_level))), 2)}
+
+                head = _piece(seg["t_start"], start, False)
+                tail = _piece(end, seg["t_end"], False)
+                middle["t_start"] = seg["t_start"] if head is None else start
+                middle["t_end"] = seg["t_end"] if tail is None else end
+                pieces = [piece for piece in (head, middle, tail) if piece is not None]
                 segments[index:index + 1] = pieces
                 rescued += 1
                 break

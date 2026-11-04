@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.71 / 2.0.71
+
+- **The rescue split refits its pieces from their own measurements.** A piece
+  with no points of its own no longer inherits the parent line - that is how the
+  model ended up drawing -13778 over the last fifteen minutes while the points
+  sat at -16000, which also produced a `+2719.6 ms -> skip audio` cut at the
+  boundary. A piece without support is dropped and the rescued segment extends
+  over that time instead.
+
 ## 3.0.70 / 2.0.70
 
 - **Long runs the fit dropped are rescued.** A dub re-cut late in a film shows

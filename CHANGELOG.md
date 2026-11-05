@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.87 / 2.0.87
+
+- **The chart says what it draws.** A legend now names the three things on it:
+  the blue points are the measured target offsets, the green line is the fitted
+  model (what the export applies), the grey dashed line is the reference at
+  0 ms. The green line was previously unexplained, which made the whole plot
+  read like two unrelated series.
+
 ## 3.0.86 / 2.0.86
 
 - **The zero line is visible.** 3.0.85 kept zero inside the range but drew it as

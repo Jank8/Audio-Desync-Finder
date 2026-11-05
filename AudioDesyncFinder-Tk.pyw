@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.86"
+APP_VERSION = "2.0.87"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4942,21 +4942,27 @@ class TimelinePanel:
                     else:
                         colours.append("#4a9eff")          # used by the model
                 ax.scatter([p["t"] for p in points], [p["offset"] for p in points],
-                           s=28, zorder=3, c=colours, edgecolors="none")
+                           s=28, zorder=3, c=colours, edgecolors="none",
+                           label="target (measured)")
 
+            first_seg = True
             for seg in (self.plan or {}).get("segments", []):
                 x0, x1 = seg["t_start"], seg["t_end"]
                 y0 = seg["offset"]
                 y1 = y0 + seg["slope"] * (x1 - x0)
-                ax.plot([x0, x1], [y0, y1], color="#00cc66", lw=1.8, zorder=2)
+                ax.plot([x0, x1], [y0, y1], color="#00cc66", lw=1.8, zorder=2,
+                        label="fitted model" if first_seg else None)
+                first_seg = False
 
             for jump in (self.plan or {}).get("jumps", []):
                 ax.axvline(jump["t"], color="#ffaa44", ls="--", lw=0.9, alpha=0.85)
 
-            ax.axhline(0.0, color="white", lw=1.2, ls="--", alpha=0.8)
-            ax.annotate("reference 0 ms", xy=(0.006, 0.0),
-                        xycoords=("axes fraction", "data"), va="bottom", ha="left",
-                        fontsize=7, color="white", alpha=0.9)
+            ax.axhline(0.0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
+                       label="reference (0 ms)")
+            handles, labels = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(loc="upper right", fontsize=7, framealpha=0.0,
+                          labelcolor="white")
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)

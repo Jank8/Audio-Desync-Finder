@@ -2236,7 +2236,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.86"
+APP_VERSION = "3.0.87"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3171,16 +3171,21 @@ class MainWindow(FluentWindow):
         if self.points:
             ax.scatter([p["t"] for p in self.points],
                        [p["offset"] for p in self.points],
-                       s=8, color=self.accent, alpha=0.9)
+                       s=8, color=self.accent, alpha=0.9,
+                       label="target (measured)")
+        first = True
         for seg in (self.plan or {}).get("segments", []):
             x0, x1 = seg["t_start"], seg["t_end"]
             y0 = seg["offset"]
             ax.plot([x0, x1], [y0, y0 + seg["slope"] * (x1 - x0)],
-                    color="#3ddc97", lw=1.6)
-        ax.axhline(0, color=self.chart_fg, lw=1.2, ls="--", alpha=0.8)
-        ax.annotate("reference 0 ms", xy=(0.006, 0),
-                    xycoords=("axes fraction", "data"), va="bottom", ha="left",
-                    fontsize=7, color=self.chart_fg, alpha=0.9)
+                    color="#3ddc97", lw=1.6,
+                    label="fitted model" if first else None)
+            first = False
+        ax.axhline(0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
+                   label="reference (0 ms)")
+        if self.points or self.plan:
+            ax.legend(loc="upper right", fontsize=7, framealpha=0.0,
+                      labelcolor=self.chart_fg)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)

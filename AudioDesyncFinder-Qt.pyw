@@ -2272,7 +2272,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.94"
+APP_VERSION = "3.0.95"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3316,7 +3316,7 @@ class MainWindow(FluentWindow):
         dx = (float(event.x) - pan["px"]) / pan["w"] * (x1 - x0)
         dy = (float(event.y) - pan["py"]) / pan["h"] * (y1 - y0)
         self.ax.set_xlim(x0 - dx, x1 - dx)
-        self.ax.set_ylim(y0 + dy, y1 + dy)
+        self.ax.set_ylim(y0 - dy, y1 - dy)
         self.canvas.draw_idle()
 
     def _pan_end(self, event):

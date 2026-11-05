@@ -3,6 +3,12 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.95 / 2.0.95
+
+- **Vertical dragging follows the pointer.** Matplotlib reports `event.y` with
+  the origin at the bottom of the display, so the vertical offset was added where
+  it had to be subtracted and the chart moved the opposite way. Both builds.
+
 ## 3.0.94 / 2.0.94
 
 - **Dragging is smooth.** The pan measured its delta in data units, which are

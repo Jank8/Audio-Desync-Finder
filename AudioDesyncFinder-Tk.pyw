@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.94"
+APP_VERSION = "2.0.95"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -5102,7 +5102,7 @@ class TimelinePanel:
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
             pan["moved"] = True
         self.ax.set_xlim(x0 - dx, x1 - dx)
-        self.ax.set_ylim(y0 + dy, y1 + dy)
+        self.ax.set_ylim(y0 - dy, y1 - dy)
         self.canvas.draw_idle()
 
     def _pan_end(self, event) -> None:

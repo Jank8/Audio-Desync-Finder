@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.84 / 2.0.84
+
+- **The unmistakable matches decide the offset.** Every measurement already
+  carries a confidence - how sharp and unambiguous its correlation peak was.
+  That number is now the weight of the point (squared) in the group fit, both
+  for the level and for the slope, so a window of identical music counts roughly
+  eighty times more than a vague window of re-recorded dialogue
+  (`9^2` against `2.5^2`).
+- `_weighted_median()` and `_confidence_weights()` are shared by both builds;
+  the plain median is still used when no confidence is available.
+
 ## 3.0.83 / 2.0.83
 
 - **A split has to beat the noise.** On the Smurfs pair the model broke the

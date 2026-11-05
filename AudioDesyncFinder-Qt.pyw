@@ -1048,6 +1048,33 @@ def compensate_points(points, rate: float):
     return out
 
 
+def _weighted_median(values, weights) -> float:
+    """Median that lets the confident measurements decide."""
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    if not len(values):
+        return 0.0
+    order = np.argsort(values)
+    values, weights = values[order], weights[order]
+    total = float(weights.sum())
+    if total <= 0.0:
+        return float(np.median(values))
+    index = int(np.searchsorted(np.cumsum(weights), total / 2.0))
+    return float(values[min(index, len(values) - 1)])
+
+
+def _confidence_weights(pts):
+    """
+    How much each measurement should count, from how clean its match was.
+
+    A window of identical music correlates sharply and gets a high confidence;
+    a window of re-recorded dialogue correlates vaguely and gets a low one.
+    Squaring that turns "we found it" into "we found it unambiguously", which
+    is what the offset should be built from.
+    """
+    return np.array([max(0.5, float(p.get("conf", p.get("ncc", 1.0)))) ** 2
+                     for p in pts], dtype=float)
+
 def _fit_group(group, fallback_slope: float, outlier_ms: float,
                allow_slope: bool = True):
     """
@@ -1064,6 +1091,7 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
     pts = [dict(p) for p in group]
     ts = np.array([p["t"] for p in pts], dtype=float)
     ys = np.array([p["offset"] for p in pts], dtype=float)
+    weights = _confidence_weights(pts)
 
     span = float(ts.max() - ts.min()) if len(ts) else 0.0
     # A short group cannot carry its own slope: two points always look
@@ -1078,10 +1106,10 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
                 if abs(dt) > 0.5:
                     slopes.append((ys[b] - ys[a]) / dt)
         slope = float(np.median(slopes)) if slopes else float(fallback_slope)
-        intercept = float(np.median(ys - slope * ts))
+        intercept = _weighted_median(ys - slope * ts, weights)
     else:
         slope = float(fallback_slope)
-        intercept = float(np.median(ys - slope * ts))
+        intercept = _weighted_median(ys - slope * ts, weights)
 
     resid = ys - (slope * ts + intercept)
     for _ in range(5):
@@ -1093,15 +1121,17 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
         pts = [p for p, k in zip(pts, keep) if k]
         ts = np.array([p["t"] for p in pts], dtype=float)
         ys = np.array([p["offset"] for p in pts], dtype=float)
+        weights = _confidence_weights(pts)
         if float(ts.max() - ts.min()) <= 0.5:
             break
         if allow_slope:
-            slope, intercept = np.polyfit(ts, ys, 1)
+            slope = float(np.polyfit(ts, ys, 1, w=np.sqrt(weights))[0])
+            intercept = _weighted_median(ys - slope * ts, weights)
         else:
             # the refit after dropping outliers must respect the same rule:
             # fitting a slope here silently undid the forced level
             slope = float(fallback_slope)
-            intercept = float(np.median(ys - slope * ts))
+            intercept = _weighted_median(ys - slope * ts, weights)
         resid = ys - (slope * ts + intercept)
 
     rms = float(np.sqrt(np.mean(resid ** 2))) if len(resid) else 0.0
@@ -2203,7 +2233,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.83"
+APP_VERSION = "3.0.84"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.85"
+APP_VERSION = "2.0.86"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4953,7 +4953,10 @@ class TimelinePanel:
             for jump in (self.plan or {}).get("jumps", []):
                 ax.axvline(jump["t"], color="#ffaa44", ls="--", lw=0.9, alpha=0.85)
 
-            ax.axhline(0.0, color="#666666", lw=0.8, ls=":")
+            ax.axhline(0.0, color="white", lw=1.2, ls="--", alpha=0.8)
+            ax.annotate("reference 0 ms", xy=(0.006, 0.0),
+                        xycoords=("axes fraction", "data"), va="bottom", ha="left",
+                        fontsize=7, color="white", alpha=0.9)
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)

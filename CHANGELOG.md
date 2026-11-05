@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.86 / 2.0.86
+
+- **The zero line is visible.** 3.0.85 kept zero inside the range but drew it as
+  a dark dotted line on a dark background, which is invisible in practice. It is
+  now a light dashed line labelled "reference 0 ms", so the distance from the
+  reference to the target is obvious at a glance.
+
 ## 3.0.85 / 2.0.85
 
 - **The reference is always on screen.** Zero is the reference track, but the

@@ -2236,7 +2236,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.85"
+APP_VERSION = "3.0.86"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3177,7 +3177,10 @@ class MainWindow(FluentWindow):
             y0 = seg["offset"]
             ax.plot([x0, x1], [y0, y0 + seg["slope"] * (x1 - x0)],
                     color="#3ddc97", lw=1.6)
-        ax.axhline(0, color=self.chart_spine, lw=0.7, ls=":")
+        ax.axhline(0, color=self.chart_fg, lw=1.2, ls="--", alpha=0.8)
+        ax.annotate("reference 0 ms", xy=(0.006, 0),
+                    xycoords=("axes fraction", "data"), va="bottom", ha="left",
+                    fontsize=7, color=self.chart_fg, alpha=0.9)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)

@@ -1478,6 +1478,39 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         if abs(delta - base_slope * dt) > jump_limit:
             breaks.append(i)
 
+    # A level change can be smaller than the scatter of the whole film and still
+    # be plain on the chart: the first hour sits at +105, the rest at -20.  The
+    # test above misses it because jump_limit grows with that global scatter, so
+    # every point is compared with the median of its own neighbourhood instead -
+    # six measurements either side, and the step has to beat their own spread.
+    if len(usable) >= 14:
+        offsets = np.array([float(p["offset"]) for p in usable])
+        candidates = []
+        for i in range(10, len(usable) - 10):
+            before = offsets[i - 10:i]
+            after = offsets[i:i + 10]
+            med_before = float(np.median(before))
+            med_after = float(np.median(after))
+            spread = max(float(np.median(np.abs(before - med_before))),
+                         float(np.median(np.abs(after - med_after))))
+            step = abs(med_after - med_before - base_slope * (
+                float(usable[i]["t"]) - float(usable[i - 1]["t"])))
+            if step >= max(100.0, 3.0 * spread):
+                candidates.append((step, i))
+        if candidates:
+            # one break per cluster of neighbouring candidates, the strongest one
+            candidates.sort(key=lambda item: item[1])
+            best = candidates[0]
+            for step, index in candidates[1:]:
+                if index - best[1] <= 3:
+                    if step > best[0]:
+                        best = (step, index)
+                else:
+                    breaks.append(best[1])
+                    best = (step, index)
+            breaks.append(best[1])
+            breaks = sorted(set(breaks))
+
     groups, start = [], 0
     for i in breaks:
         groups.append(usable[start:i])
@@ -2237,7 +2270,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.88"
+APP_VERSION = "3.0.89"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2489,7 +2522,7 @@ class MainWindow(FluentWindow):
         sl.setSpacing(10)
         sl.addWidget(StrongBodyLabel("Window (s)"))
         self.entry_window = LineEdit()
-        self.entry_window.setText("40")
+        self.entry_window.setText("80")
         self.entry_window.setFixedWidth(110)
         self.entry_window.setAlignment(Qt.AlignCenter)
         self.entry_window.setValidator(QIntValidator(5, 300, self))
@@ -2503,7 +2536,7 @@ class MainWindow(FluentWindow):
         sl.addWidget(self.entry_step)
         sl.addWidget(StrongBodyLabel("Min confidence"))
         self.entry_conf = LineEdit()
-        self.entry_conf.setText("4")
+        self.entry_conf.setText("2")
         self.entry_conf.setFixedWidth(110)
         self.entry_conf.setAlignment(Qt.AlignCenter)
         self.entry_conf.setValidator(QDoubleValidator(0.5, 60.0, 2, self))
@@ -2548,6 +2581,7 @@ class MainWindow(FluentWindow):
         self.fig = Figure(figsize=(6, 3.2), facecolor=self.chart_bg)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasQTAgg(self.fig)
+        self.canvas.mpl_connect("scroll_event", self._zoom_at)
         self.canvas.setStyleSheet("background:transparent;")
         row = QHBoxLayout()
         row.addWidget(self.canvas, 3)
@@ -2848,7 +2882,7 @@ class MainWindow(FluentWindow):
             else:
                 coarse = 0.0
             points = scan_arrays(
-                ref, scan_tgt, window=self._num(self.entry_window, 40),
+                ref, scan_tgt, window=self._num(self.entry_window, 80),
                 step=step, mode=mode,
                 progress=lambda done, total: self.ui_queue.put(
                     ("progress", (72 + 27 * done / max(total, 1),
@@ -2862,7 +2896,7 @@ class MainWindow(FluentWindow):
                 for point in points:
                     point["offset"] = round(point["offset"] + coarse, 2)
             plan = build_plan(points, meta["ref_duration"],
-                                     min_conf=self._num(self.entry_conf, 4),
+                                     min_conf=self._num(self.entry_conf, 2),
                                      slope_hint=hint, allow_drift=allow_drift)
             if plan.get("jumps") and not self.stop_event.is_set():
                 # the 40 s window blurs where an edit is; 6 s windows pin the
@@ -2878,7 +2912,7 @@ class MainWindow(FluentWindow):
                     points = sorted(points + extra_points, key=lambda p: p["t"])
                     self.ui_queue.put(("points", points))
                     plan = build_plan(points, meta["ref_duration"],
-                                      min_conf=self._num(self.entry_conf, 4),
+                                      min_conf=self._num(self.entry_conf, 2),
                                       slope_hint=hint, allow_drift=allow_drift)
             self.ui_queue.put(("points", points))
             self.ui_queue.put(("plan", plan))
@@ -3146,7 +3180,7 @@ class MainWindow(FluentWindow):
             return
         del self.points[row]
         plan = build_plan(self.points, self.meta["ref_duration"],
-                                 min_conf=self._num(self.entry_conf, 4),
+                                 min_conf=self._num(self.entry_conf, 2),
                                  slope_hint=self._fps_hint(),
                                  allow_drift=getattr(self, "allow_drift", True))
         self.plan = plan
@@ -3208,8 +3242,9 @@ class MainWindow(FluentWindow):
             handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
                                   markersize=5))
             labels.append("on the model")
-            ax.legend(handles, labels, loc="upper right", fontsize=7,
-                      framealpha=0.0, labelcolor=self.chart_fg)
+            ax.legend(handles, labels, loc="upper center",
+                      bbox_to_anchor=(0.5, -0.30), ncol=4, fontsize=7,
+                      frameon=False, labelcolor=self.chart_fg)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)
@@ -3230,11 +3265,25 @@ class MainWindow(FluentWindow):
         # rotated timecode labels need their own strip, otherwise the axis
         # title is clipped by the canvas edge
         try:
-            self.canvas.figure.subplots_adjust(bottom=0.26, left=0.10,
+            self.canvas.figure.subplots_adjust(bottom=0.34, left=0.10,
                                                right=0.985, top=0.97)
         except Exception:
             pass
         ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
+        self.canvas.draw_idle()
+
+    def _zoom_at(self, event):
+        """Ctrl + wheel zooms the plot around the pointer."""
+        if event.inaxes is None or event.xdata is None or event.ydata is None:
+            return
+        if not (QApplication.keyboardModifiers() & Qt.ControlModifier):
+            return
+        step = getattr(event, "step", 0)
+        factor = 0.8 if step > 0 else 1.25
+        xlim, ylim = self.ax.get_xlim(), self.ax.get_ylim()
+        x, y = float(event.xdata), float(event.ydata)
+        self.ax.set_xlim([x - (x - xlim[0]) * factor, x + (xlim[1] - x) * factor])
+        self.ax.set_ylim([y - (y - ylim[0]) * factor, y + (ylim[1] - y) * factor])
         self.canvas.draw_idle()
 
 

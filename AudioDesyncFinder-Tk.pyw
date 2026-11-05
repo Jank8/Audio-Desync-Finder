@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.88"
+APP_VERSION = "2.0.89"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3300,6 +3300,39 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         if abs(delta - base_slope * dt) > jump_limit:
             breaks.append(i)
 
+    # A level change can be smaller than the scatter of the whole film and still
+    # be plain on the chart: the first hour sits at +105, the rest at -20.  The
+    # test above misses it because jump_limit grows with that global scatter, so
+    # every point is compared with the median of its own neighbourhood instead -
+    # six measurements either side, and the step has to beat their own spread.
+    if len(usable) >= 14:
+        offsets = np.array([float(p["offset"]) for p in usable])
+        candidates = []
+        for i in range(10, len(usable) - 10):
+            before = offsets[i - 10:i]
+            after = offsets[i:i + 10]
+            med_before = float(np.median(before))
+            med_after = float(np.median(after))
+            spread = max(float(np.median(np.abs(before - med_before))),
+                         float(np.median(np.abs(after - med_after))))
+            step = abs(med_after - med_before - base_slope * (
+                float(usable[i]["t"]) - float(usable[i - 1]["t"])))
+            if step >= max(100.0, 3.0 * spread):
+                candidates.append((step, i))
+        if candidates:
+            # one break per cluster of neighbouring candidates, the strongest one
+            candidates.sort(key=lambda item: item[1])
+            best = candidates[0]
+            for step, index in candidates[1:]:
+                if index - best[1] <= 3:
+                    if step > best[0]:
+                        best = (step, index)
+                else:
+                    breaks.append(best[1])
+                    best = (step, index)
+            breaks.append(best[1])
+            breaks = sorted(set(breaks))
+
     groups, start = [], 0
     for i in breaks:
         groups.append(usable[start:i])
@@ -4119,9 +4152,9 @@ class TimelinePanel:
                        buttonbackground="#3a3a3a").pack(side=tk.LEFT, padx=(0, 12))
             return var
 
-        self.var_window = _spin(row, "Window (s):", 40, 6, 5)
+        self.var_window = _spin(row, "Window (s):", 80, 6, 5)
         self.var_step = _spin(row, "Step (s):", 30, 6, 5)
-        self.var_conf = _spin(row, "Min confidence:", 4.0, 5, 0.5)
+        self.var_conf = _spin(row, "Min confidence:", 2.0, 5, 0.5)
         _cores_default = max(1, (os.cpu_count() or 4) - 2)
         self.var_cores = _spin(row, "Cores:", _cores_default, 4, 1)
 
@@ -4273,6 +4306,7 @@ class TimelinePanel:
         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_box)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         self.canvas.mpl_connect("button_press_event", self._on_chart_click)
+        self.canvas.get_tk_widget().bind("<Control-MouseWheel>", self._on_zoom)
         self._draw()
 
         # ---- segments ----------------------------------------------------
@@ -4454,13 +4488,13 @@ class TimelinePanel:
         return max(lo, min(hi, value))
 
     def _window(self) -> float:
-        return self._num(self.var_window, 40.0, MIN_WINDOW_S, 180.0)
+        return self._num(self.var_window, 80.0, MIN_WINDOW_S, 180.0)
 
     def _step(self) -> float:
         return self._num(self.var_step, 30.0, 2.0, 180.0)
 
     def _conf(self) -> float:
-        return self._num(self.var_conf, 4.0, 0.5, 50.0)
+        return self._num(self.var_conf, 2.0, 0.5, 50.0)
 
     def _mode(self) -> str:
         """Selected comparison mode: auto / waveform / envelope."""
@@ -4927,6 +4961,23 @@ class TimelinePanel:
             else tk.DISABLED)
         self._draw()
 
+    def _on_zoom(self, event):
+        """Ctrl + wheel zooms the timeline around the pointer."""
+        try:
+            x_pix, y_pix = event.x, event.y
+            inv = self.ax.transData.inverted()
+            x, y = inv.transform((x_pix, y_pix))
+            factor = 0.8 if event.delta > 0 else 1.25
+            xlim, ylim = self.ax.get_xlim(), self.ax.get_ylim()
+            self.ax.set_xlim([x - (x - xlim[0]) * factor,
+                              x + (xlim[1] - x) * factor])
+            self.ax.set_ylim([y - (y - ylim[0]) * factor,
+                              y + (ylim[1] - y) * factor])
+            self.canvas.draw_idle()
+        except Exception:
+            pass
+        return "break"
+
     def _segment_at(self, t):
         for seg in (self.plan or {}).get("segments", []):
             if seg["t_start"] - 1.0 <= t <= seg["t_end"] + 1.0:
@@ -4981,8 +5032,9 @@ class TimelinePanel:
                                   markersize=5))
             labels.append("on the model")
             if handles:
-                ax.legend(handles, labels, loc="upper right", fontsize=7,
-                          framealpha=0.0, labelcolor="white")
+                ax.legend(handles, labels, loc="upper center",
+                          bbox_to_anchor=(0.5, -0.30), ncol=4, fontsize=7,
+                          frameon=False, labelcolor="white")
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)
@@ -4997,7 +5049,7 @@ class TimelinePanel:
                     lambda value, _pos: format_timecode(value)))
             ax.set_xlabel("Film time", color="white", fontsize=8)
             try:
-                self.fig.subplots_adjust(bottom=0.26, left=0.11,
+                self.fig.subplots_adjust(bottom=0.34, left=0.11,
                                                   right=0.985, top=0.97)
             except Exception:
                 pass

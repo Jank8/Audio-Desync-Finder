@@ -3,6 +3,20 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.89 / 2.0.89
+
+- **Level changes are found against local medians.** The Smurfs pair sits at
+  +105 for the first hour and -20 after, yet the model averaged the two into one
+  line at +83: the break threshold grows with the scatter of the whole film, and
+  both split passes needed a difference of twice the segment RMS, which the step
+  itself inflates. A break is now also placed where the median of the ten
+  measurements before a candidate differs from the ten after by 3x their own
+  spread (and 100 ms).
+- **Defaults changed**: Window 80 s, Min confidence 2.
+- **The legend moved under the plot**, in one row, so it stops covering the
+  points, and the axis title sits above it.
+- **Ctrl + mouse wheel zooms** the chart around the pointer, in both builds.
+
 ## 3.0.88 / 2.0.88
 
 - **The measurements that sit on the model are red.** A point is red when it is

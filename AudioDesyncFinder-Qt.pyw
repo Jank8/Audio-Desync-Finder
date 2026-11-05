@@ -2272,7 +2272,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.93"
+APP_VERSION = "3.0.94"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3289,23 +3289,34 @@ class MainWindow(FluentWindow):
         self.canvas.draw_idle()
 
     def _pan_start(self, event):
-        """Left button down: remember where the view started."""
+        """Left button down: remember the pixels and the view at that moment."""
         if getattr(event, "button", None) != 1 or event.inaxes is None:
             return
-        if event.xdata is None or event.ydata is None:
+        bbox = self.ax.bbox
+        if bbox.width < 1 or bbox.height < 1:
             return
-        self._pan = {"x": float(event.xdata), "y": float(event.ydata),
-                     "xlim": self.ax.get_xlim(), "ylim": self.ax.get_ylim()}
+        self._pan = {"px": float(event.x), "py": float(event.y),
+                     "xlim": self.ax.get_xlim(), "ylim": self.ax.get_ylim(),
+                     "w": float(bbox.width), "h": float(bbox.height)}
 
     def _pan_move(self, event):
-        """Mouse drag moves the plot with the pointer."""
+        """
+        Mouse drag moves the plot with the pointer.
+
+        The delta is measured in pixels against the view captured at the press.
+        Measuring it in data units feeds the movement back into the mapping, so
+        every pixel of travel changes how far the next pixel goes and the drag
+        stutters.
+        """
         pan = getattr(self, "_pan", None)
-        if pan is None or event.xdata is None or event.ydata is None:
+        if pan is None:
             return
-        dx = pan["x"] - float(event.xdata)
-        dy = pan["y"] - float(event.ydata)
-        self.ax.set_xlim(pan["xlim"][0] + dx, pan["xlim"][1] + dx)
-        self.ax.set_ylim(pan["ylim"][0] + dy, pan["ylim"][1] + dy)
+        x0, x1 = pan["xlim"]
+        y0, y1 = pan["ylim"]
+        dx = (float(event.x) - pan["px"]) / pan["w"] * (x1 - x0)
+        dy = (float(event.y) - pan["py"]) / pan["h"] * (y1 - y0)
+        self.ax.set_xlim(x0 - dx, x1 - dx)
+        self.ax.set_ylim(y0 + dy, y1 + dy)
         self.canvas.draw_idle()
 
     def _pan_end(self, event):

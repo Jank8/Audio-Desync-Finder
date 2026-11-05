@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.94 / 2.0.94
+
+- **Dragging is smooth.** The pan measured its delta in data units, which are
+  derived from the limits it was changing at the same time: every pixel of travel
+  altered how far the next pixel went, so the chart stuttered and accelerated.
+  The delta is measured in pixels against the view captured at the press and
+  converted once, so the movement follows the pointer exactly.
+
 ## 3.0.93 / 2.0.93
 
 - **The legend is a row of labels in the card, not part of the chart.** It is

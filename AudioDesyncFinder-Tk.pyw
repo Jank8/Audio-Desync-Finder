@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.79"
+APP_VERSION = "2.0.80"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -658,6 +658,7 @@ def _import_scientific_stack() -> None:
     matplotlib.use('TkAgg')
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 
 # ---------------------------------------------------------------------------
@@ -1356,7 +1357,11 @@ def update_visualization() -> None:
     ax.plot(time1, plot_data1, color='#4a9eff', linewidth=0.8, alpha=0.7, label=file1_label)
     ax.plot(time1, plot_data2, color='#ff6b6b', linewidth=0.8, alpha=0.7, label=file2_label)
 
-    ax.set_xlabel('Time (s)', color='white', fontsize=9)
+    if time1 is not None and len(time1):
+        ax.xaxis.set_major_locator(MultipleLocator(time_tick_step(float(time1[-1]))))
+        ax.xaxis.set_major_formatter(FuncFormatter(
+            lambda value, _pos: format_timecode(value)))
+    ax.set_xlabel('Film time', color='white', fontsize=9)
     ax.set_ylabel('Amplitude', color='white', fontsize=9)
     ax.legend(loc='upper right', fontsize=8, framealpha=0.8)
     ax.grid(True, alpha=0.2, color='white')
@@ -2928,6 +2933,23 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
 COARSE_MARGIN = 1.15     # a shift must beat "already in sync" by this much
 
 
+def format_timecode(seconds: float) -> str:
+    """Film time as minutes:seconds (or h:mm:ss past the hour)."""
+    total = int(round(float(seconds)))
+    hours, rest = divmod(max(total, 0), 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def time_tick_step(duration: float) -> float:
+    """Tick spacing that puts a dozen labels on the time axis."""
+    for step in (15, 30, 60, 120, 300, 600, 900, 1800, 3600):
+        if float(duration) / step <= 18:
+            return float(step)
+    return 3600.0
+
 def coarse_offset(a, b) -> float:
     """
     Rough whole-track offset in milliseconds.
@@ -4133,7 +4155,7 @@ class TimelinePanel:
                                  style="Ads.Treeview", height=5)
         for col, head, width, anchor in (
                 ("idx", "#", 30, tk.CENTER),
-                ("t", "Time (s)", 80, tk.CENTER),
+                ("t", "Time", 80, tk.CENTER),
                 ("off", "Offset (ms)", 100, tk.E),
                 ("conf", "Conf", 50, tk.E),
                 ("kind", "Source", 80, tk.CENTER)):
@@ -4814,7 +4836,7 @@ class TimelinePanel:
                 source = "wave" if point.get("mode") == "w" else "env"
             self.tree.insert("", tk.END, values=(
                 i + 1,
-                f"{point['t']:.2f}",
+                format_timecode(point["t"]),
                 f"{point['offset']:+.1f}",
                 f"{point.get('conf', point.get('ncc', 0)):.1f}",
                 source + ("" if enabled else " (off)"),
@@ -4879,9 +4901,18 @@ class TimelinePanel:
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)
-            ax.set_xlabel("Time (s)", color="white", fontsize=8)
+            span = 0.0
+            if points:
+                span = max(float(p["t"]) for p in points)
+            elif self.plan:
+                span = float(self.plan.get("duration") or 0.0)
+            if span > 0:
+                ax.xaxis.set_major_locator(MultipleLocator(time_tick_step(span)))
+                ax.xaxis.set_major_formatter(FuncFormatter(
+                    lambda value, _pos: format_timecode(value)))
+            ax.set_xlabel("Film time", color="white", fontsize=8)
             ax.set_ylabel("Offset (ms)", color="white", fontsize=8)
-            ax.tick_params(colors="white", labelsize=7)
+            ax.tick_params(colors="white", labelsize=7, labelrotation=25)
             ax.grid(True, alpha=0.2, color="white")
             ax.set_facecolor("#1a1a1a")
             self.fig.patch.set_facecolor("#1a1a1a")

@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.80 / 2.0.80
+
+- **The time axis reads like a film, not like a number of seconds.** Ticks are
+  now placed every 15 s to 30 min depending on the running time (about sixteen
+  labels instead of ten), formatted `m:ss` / `h:mm:ss`, and rotated so they do
+  not collide. The axis title is "Film time".
+- **The points table shows the same timecode** instead of raw seconds, so a
+  suspicious point can be found in a player directly. `format_timecode()` and
+  `time_tick_step()` live in both builds' engines.
+
 ## 3.0.79 / 2.0.79
 
 - **A whole-track offset has to show up in the durations.** A file that starts

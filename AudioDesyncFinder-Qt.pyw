@@ -112,6 +112,7 @@ import shutil
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 # ---- engine (inlined, was sync_engine.py) ----
 """Sync engine: decoding, multi-point scanning, piecewise model and export.
@@ -1109,6 +1110,23 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
 
 COARSE_MARGIN = 1.15     # a shift must beat "already in sync" by this much
 
+
+def format_timecode(seconds: float) -> str:
+    """Film time as minutes:seconds (or h:mm:ss past the hour)."""
+    total = int(round(float(seconds)))
+    hours, rest = divmod(max(total, 0), 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def time_tick_step(duration: float) -> float:
+    """Tick spacing that puts a dozen labels on the time axis."""
+    for step in (15, 30, 60, 120, 300, 600, 900, 1800, 3600):
+        if float(duration) / step <= 18:
+            return float(step)
+    return 3600.0
 
 def coarse_offset(a, b) -> float:
     """
@@ -2162,7 +2180,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.79"
+APP_VERSION = "3.0.80"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2479,7 +2497,7 @@ class MainWindow(FluentWindow):
         self.table = TableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(
-            ["Time (s)", "Offset (ms)", "Conf", "Source"])
+            ["Time", "Offset (ms)", "Conf", "Source"])
         self.table.verticalHeader().hide()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(6)
@@ -3060,7 +3078,8 @@ class MainWindow(FluentWindow):
         for i, p in enumerate(self.points):
             source = "manual" if p.get("kind") == "manual" else (
                 "wave" if p.get("mode") == "w" else "env")
-            for col, text in enumerate((f"{p['t']:.1f}", f"{p['offset']:+.1f}",
+            for col, text in enumerate((format_timecode(p["t"]),
+                                        f"{p['offset']:+.1f}",
                                         f"{p.get('conf', 0):.1f}", source)):
                 self.table.setItem(i, col, QTableWidgetItem(text))
 
@@ -3106,11 +3125,20 @@ class MainWindow(FluentWindow):
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)
-        ax.tick_params(colors=self.chart_fg, labelsize=7)
+        ax.tick_params(colors=self.chart_fg, labelsize=7, labelrotation=25)
         for spine in ax.spines.values():
             spine.set_color(self.chart_spine)
         ax.grid(alpha=0.25, color=self.chart_grid)
-        ax.set_xlabel("Time (s)", color=self.chart_fg, fontsize=8)
+        span = 0.0
+        if self.points:
+            span = max(float(p["t"]) for p in self.points)
+        elif self.plan:
+            span = float(self.plan.get("duration") or 0.0)
+        if span > 0:
+            ax.xaxis.set_major_locator(MultipleLocator(time_tick_step(span)))
+            ax.xaxis.set_major_formatter(FuncFormatter(
+                lambda value, _pos: format_timecode(value)))
+        ax.set_xlabel("Film time", color=self.chart_fg, fontsize=8)
         ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
         self.canvas.draw_idle()
 

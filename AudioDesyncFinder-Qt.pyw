@@ -2162,7 +2162,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.78"
+APP_VERSION = "3.0.79"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2755,6 +2755,16 @@ class MainWindow(FluentWindow):
             try:
                 coarse = coarse_offset(ref, scan_tgt)
             except Exception:
+                coarse = 0.0
+            # A whole-track offset has to show up in the durations: a file that
+            # starts 66 s late is also 66 s shorter.  Without this test a dub of
+            # the very same cut was shifted by a minute and a half before the
+            # scan, and every measurement afterwards agreed with the shift.
+            duration_gap = abs(meta["ref_duration"] - meta["target_duration"])
+            if abs(coarse) > 30000 and abs(coarse) > duration_gap + 20.0:
+                self.ui_queue.put(("log", (
+                    f"Coarse alignment {coarse:+.0f} ms ignored - the files differ "
+                    f"by {duration_gap:.0f} s, so that is not a whole-track offset")))
                 coarse = 0.0
             if abs(coarse) > 30000:
                 self.ui_queue.put(("log", f"Coarse alignment {coarse:+.0f} ms - "

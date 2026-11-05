@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.79 / 2.0.79
+
+- **A whole-track offset has to show up in the durations.** A file that starts
+  66 s late is also 66 s shorter, so a coarse alignment bigger than the
+  difference in running time plus 20 s is ignored instead of being applied:
+  "Coarse alignment -66450 ms ignored - the files differ by 15 s, so that is
+  not a whole-track offset". 3.0.78 cleaned the score up, but a strong spurious
+  peak still passed it on two dubs of the same cut.
+- Measured with the bogus peak forced in: the model comes out at the real
+  421.2 ms instead of -66450.
+
 ## 3.0.78 / 2.0.78
 
 - **The coarse alignment can no longer run away.** The whole-track correlation

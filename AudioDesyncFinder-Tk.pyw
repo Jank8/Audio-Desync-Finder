@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.78"
+APP_VERSION = "2.0.79"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4507,10 +4507,20 @@ class TimelinePanel:
             coarse = coarse_offset(ref, tgt)
         except Exception:
             coarse = 0.0
+        # A whole-track offset has to show up in the durations: a file that
+        # starts 66 s late is also 66 s shorter.  Without this test a dub of the
+        # very same cut was shifted by a minute and a half before the scan.
+        duration_gap = abs(meta["ref_duration"] - meta["target_duration"])
+        if abs(coarse) > 30000 and abs(coarse) > duration_gap + 20.0:
+            console_log(f"Coarse alignment {coarse:+.0f} ms ignored – the files "
+                        f"differ by {duration_gap:.0f} s, so that is not a "
+                        "whole-track offset", "info")
+            coarse = 0.0
         if abs(coarse) > 30000:
             self._post("status", f"Coarse alignment {coarse:+.0f} ms – "
                                  f"shifting the target before the scan…")
-            tgt = shift_track_by_ms(tgt, coarse)
+            tgt = shift_track_by_ms(tgt,
+                                    coarse)
             scan_tgt = shift_track_by_ms(scan_tgt, coarse)
         else:
             coarse = 0.0

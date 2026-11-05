@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.81 / 2.0.81
+
+- **A jump that needs seconds of silence is a missing piece, not an offset.**
+  The model can only keep the video in sync by padding the gap, so the export
+  gets a hole - which is exactly what happened on Despicable Me 3: 10.0 s of
+  silence at 1:07:15, and the muxed film fell apart there. The plan now says it
+  in the report ("Jump at 1:07:15 needs 10.0 s of silence: the target is
+  missing that content, not shifted") and in the large notice ("1 cut, 10.0 s
+  missing at 1:07:15 - a different release of the target is recommended").
+- A gap under half a second is still treated as an ordinary edit.
+
 ## 3.0.80 / 2.0.80
 
 - **The time axis reads like a film, not like a number of seconds.** Ticks are

@@ -1790,9 +1790,23 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     trend_drift = abs(float(trend_slope or 0.0)) * float(duration)
     drift_ms = max(fitted_drift, trend_drift)
     worst_rms = max((float(seg["rms"]) for seg in segments), default=0.0)
-    if len(jumps) >= 2 or drift_ms >= 1500.0 or worst_rms > 80.0:
+    # A jump that needs seconds of padding means the target is missing content,
+    # not that it is shifted: the export would put a hole in the film.  That is
+    # worse than any offset, so it is reported as a mismatch on its own.
+    gap_ms, gap_at = 0.0, 0.0
+    for jump in jumps:
+        size = abs(float(jump["delta"]))
+        if jump.get("mode") == "pad" and size >= 500.0 and size > gap_ms:
+            gap_ms, gap_at = size, float(jump["t"])
+    if gap_ms >= 500.0:
+        warnings.append(
+            f"Jump at {format_timecode(gap_at)} needs {gap_ms / 1000.0:.1f} s of "
+            "silence: the target is missing that content, not shifted.")
+    if (len(jumps) >= 2 or drift_ms >= 1500.0 or worst_rms > 80.0
+            or gap_ms >= 500.0):
         plan_mismatch = {"edits": len(jumps), "drift_ms": round(drift_ms, 1),
-                         "rms": round(worst_rms, 1)}
+                         "rms": round(worst_rms, 1), "gap_ms": round(gap_ms, 1),
+                         "gap_at": round(gap_at, 1)}
     else:
         plan_mismatch = None
 
@@ -1823,6 +1837,10 @@ def mismatch_text(plan) -> str:
     drift = float(info.get("drift_ms") or 0.0)
     if abs(drift) >= 200.0:
         parts.append(f"{drift / 1000.0:+.1f} s of drift")
+    gap = float(info.get("gap_ms") or 0.0)
+    if gap >= 500.0:
+        parts.append(f"{gap / 1000.0:.1f} s missing at "
+                     f"{format_timecode(float(info.get('gap_at') or 0.0))}")
     if float(info.get("rms") or 0.0) > 80.0:
         parts.append(f"RMS {float(info['rms']):.0f} ms")
     detail = " (" + ", ".join(parts) + ")" if parts else ""
@@ -2180,7 +2198,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.80"
+APP_VERSION = "3.0.81"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

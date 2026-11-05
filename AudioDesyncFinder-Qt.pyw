@@ -2198,7 +2198,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.81"
+APP_VERSION = "3.0.82"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3157,6 +3157,13 @@ class MainWindow(FluentWindow):
             ax.xaxis.set_major_formatter(FuncFormatter(
                 lambda value, _pos: format_timecode(value)))
         ax.set_xlabel("Film time", color=self.chart_fg, fontsize=8)
+        # rotated timecode labels need their own strip, otherwise the axis
+        # title is clipped by the canvas edge
+        try:
+            self.canvas.figure.subplots_adjust(bottom=0.26, left=0.10,
+                                               right=0.985, top=0.97)
+        except Exception:
+            pass
         ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
         self.canvas.draw_idle()
 

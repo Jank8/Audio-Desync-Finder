@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.82 / 2.0.82
+
+- **The axis title has room again.** The rotated timecode labels of 3.0.80 were
+  drawn into the canvas margin, so "Film time" was clipped away on shorter
+  windows. The plot now keeps a 26 % bottom strip (and a slightly wider left
+  margin) for them, in both builds.
+
 ## 3.0.81 / 2.0.81
 
 - **A jump that needs seconds of silence is a missing piece, not an offset.**

@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.81"
+APP_VERSION = "2.0.82"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4929,6 +4929,11 @@ class TimelinePanel:
                 ax.xaxis.set_major_formatter(FuncFormatter(
                     lambda value, _pos: format_timecode(value)))
             ax.set_xlabel("Film time", color="white", fontsize=8)
+            try:
+                self.fig.subplots_adjust(bottom=0.26, left=0.11,
+                                                  right=0.985, top=0.97)
+            except Exception:
+                pass
             ax.set_ylabel("Offset (ms)", color="white", fontsize=8)
             ax.tick_params(colors="white", labelsize=7, labelrotation=25)
             ax.grid(True, alpha=0.2, color="white")

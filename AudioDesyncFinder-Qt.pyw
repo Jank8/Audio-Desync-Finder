@@ -2272,7 +2272,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.92"
+APP_VERSION = "3.0.93"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2599,6 +2599,24 @@ class MainWindow(FluentWindow):
         self.table.setBorderRadius(6)
         row.addWidget(self.table, 2)
         cl.addLayout(row)
+        # the legend lives outside the canvas, in the strip under the plot, so
+        # the chart itself is only data
+        legend_row = QHBoxLayout()
+        legend_row.setSpacing(16)
+        legend_row.setContentsMargins(6, 0, 0, 0)
+        for colour, text in (("#4a9eff", "target (measured)"),
+                             ("#3ddc97", "fitted model"),
+                             ("#c8c8c8", "reference (0 ms)"),
+                             ("#ff5a5f", "on the model")):
+            dot = BodyLabel("●")
+            dot.setStyleSheet(f"BodyLabel{{color:{colour};font-size:11px;}}")
+            legend_row.addWidget(dot)
+            caption = BodyLabel(text)
+            caption.setStyleSheet(
+                f"BodyLabel{{color:{self.chart_fg};font-size:8pt;}}")
+            legend_row.addWidget(caption)
+        legend_row.addStretch(1)
+        cl.addLayout(legend_row)
         bar = QHBoxLayout()
         bar.addStretch(1)
         self.btn_del = PushButton("Delete selected point")
@@ -3242,15 +3260,7 @@ class MainWindow(FluentWindow):
             first = False
         ax.axhline(0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
                    label="reference (0 ms)")
-        if self.points or self.plan:
-            handles, labels = ax.get_legend_handles_labels()
-            handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
-                                  markersize=5))
-            labels.append("on the model")
-            ax.legend(handles, labels, loc="lower center",
-                      bbox_to_anchor=(0.5, 0.005), ncol=4, fontsize=7,
-                      frameon=False, labelcolor=self.chart_fg,
-                      bbox_transform=self.canvas.figure.transFigure)
+        # the legend is a row of labels under the canvas (see the layout above)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)
@@ -3271,7 +3281,7 @@ class MainWindow(FluentWindow):
         # rotated timecode labels need their own strip, otherwise the axis
         # title is clipped by the canvas edge
         try:
-            self.canvas.figure.subplots_adjust(bottom=0.30, left=0.10,
+            self.canvas.figure.subplots_adjust(bottom=0.22, left=0.10,
                                                right=0.985, top=0.97)
         except Exception:
             pass

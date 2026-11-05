@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.93 / 2.0.93
+
+- **The legend is a row of labels in the card, not part of the chart.** It is
+  built from the interface widgets now (coloured dot + caption), sits in the
+  strip under the canvas and leaves the plot entirely to the data - the bottom
+  margin went from 30 % to 22 %, so the chart is taller too. Both builds.
+
 ## 3.0.92 / 2.0.92
 
 - **The legend sits in the free strip at the bottom of the chart card.** It is

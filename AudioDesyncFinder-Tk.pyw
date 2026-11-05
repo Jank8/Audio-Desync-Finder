@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.92"
+APP_VERSION = "2.0.93"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4307,6 +4307,17 @@ class TimelinePanel:
         self.ax.set_facecolor("#1a1a1a")
         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_box)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        # legend outside the canvas, in the strip under the plot
+        legend = tk.Frame(chart_box, bg=BG_PANEL)
+        legend.pack(fill=tk.X, padx=10, pady=(0, 6))
+        for colour, text in (("#4a9eff", "target (measured)"),
+                             ("#00cc66", "fitted model"),
+                             ("#c8c8c8", "reference (0 ms)"),
+                             ("#ff5a5f", "on the model")):
+            tk.Label(legend, text="●", bg=BG_PANEL, fg=colour,
+                     font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 2))
+            tk.Label(legend, text=text, bg=BG_PANEL, fg="#aaaaaa",
+                     font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 16))
         self.canvas.mpl_connect("button_press_event", self._on_chart_click)
         self.canvas.mpl_connect("button_press_event", self._pan_start)
         self.canvas.mpl_connect("motion_notify_event", self._pan_move)
@@ -5032,15 +5043,7 @@ class TimelinePanel:
 
             ax.axhline(0.0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
                        label="reference (0 ms)")
-            handles, labels = ax.get_legend_handles_labels()
-            handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
-                                  markersize=5))
-            labels.append("on the model")
-            if handles:
-                ax.legend(handles, labels, loc="lower center",
-                          bbox_to_anchor=(0.5, 0.005), ncol=4, fontsize=7,
-                          frameon=False, labelcolor="white",
-                          bbox_transform=self.fig.transFigure)
+            # the legend is a row of labels under the canvas
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)
@@ -5055,7 +5058,7 @@ class TimelinePanel:
                     lambda value, _pos: format_timecode(value)))
             ax.set_xlabel("Film time", color="white", fontsize=8)
             try:
-                self.fig.subplots_adjust(bottom=0.30, left=0.11,
+                self.fig.subplots_adjust(bottom=0.22, left=0.11,
                                                   right=0.985, top=0.97)
             except Exception:
                 pass

@@ -3,6 +3,19 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.78 / 2.0.78
+
+- **The coarse alignment can no longer run away.** The whole-track correlation
+  was summed unnormalised and took the absolute value, so a lag with a short
+  overlap - or an anti-correlation - could win. On two dubs of the same cut it
+  reported -66 s, shifted the target before measuring and every later point
+  then agreed with the shift. The score is now a mean product per overlapping
+  sample, only positive correlation counts, lags with less than 40 % overlap
+  are ignored, and a shift has to score 0.15+ and beat "already in sync" by
+  15 %.
+- Measured: 421 ms delay -> 420 ms; 24.6 s intro cut -> -24180 ms; identical
+  tracks, unrelated noise and a 24.6 s adelay -> 0 ms.
+
 ## 3.0.77 / 2.0.77
 
 - **The decode cache is per file, not per pair.** Scanning A against B and then

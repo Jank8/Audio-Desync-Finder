@@ -1107,6 +1107,9 @@ def _fit_group(group, fallback_slope: float, outlier_ms: float,
     return float(slope), float(intercept), pts, rms
 
 
+COARSE_MARGIN = 1.15     # a shift must beat "already in sync" by this much
+
+
 def coarse_offset(a, b) -> float:
     """
     Rough whole-track offset in milliseconds.
@@ -1114,14 +1117,42 @@ def coarse_offset(a, b) -> float:
     A single window can only resolve offsets up to its own length, so a target
     that starts minutes late would never be found by the scan.  Correlating the
     full-length energy envelopes finds any offset, accurate to a few ms.
+
+    Two corrections matter more than the peak itself:
+
+    * the sum is divided by the number of overlapping samples, otherwise a lag
+      with a long overlap always wins and a short one can never compete;
+    * only positive correlation counts - two energy envelopes cannot be
+      "anti-aligned", so an absolute value would happily pick a trough.
+
+    And a shift has to be clearly better than doing nothing.  Two dubs of the
+    same film share their music and effects, so a spurious peak seconds away
+    used to be trusted and dragged every later measurement with it; a real
+    intro difference (24 s, say) beats zero alignment by a wide margin, a
+    coincidence does not.
     """
     env_a, env_b = _envelope_of(a, SCAN_SR), _envelope_of(b, SCAN_SR)
     if len(env_a) < 10 or len(env_b) < 10:
         return 0.0
     corr = signal.correlate(env_a, env_b, mode="full", method="fft")
     lags = signal.correlation_lags(len(env_a), len(env_b), mode="full")
-    lag = float(lags[int(np.argmax(np.abs(corr)))])
-    return float(-lag * ENVELOPE_HOP_S * 1000.0)
+    overlap = np.minimum(np.minimum(len(env_a), len(env_b)),
+                         np.minimum(len(env_a) - lags, len(env_b) + lags))
+    score = corr / np.maximum(overlap, 1)
+    # a handful of samples at a wild lag can score +-1 by accident, so only
+    # lags that still overlap the two tracks properly are allowed to win
+    valid = overlap >= 0.4 * min(len(env_a), len(env_b))
+    masked = np.where(valid, score, -np.inf)
+    at_zero = float(score[int(np.where(lags == 0)[0][0])])
+    best = int(np.argmax(masked))
+    best_lag = float(lags[best])
+    best_score = float(masked[best])
+    # A real offset aligns the shared music and effects and scores 0.9+; noise
+    # and coincidence stay under 0.1.  Both tests have to pass, otherwise two
+    # dubs of the same cut get dragged a minute and a half apart.
+    if best_score < 0.15 or best_score < at_zero * COARSE_MARGIN:
+        return 0.0
+    return float(-best_lag * ENVELOPE_HOP_S * 1000.0)
 
 
 def shift_track_by_ms(track, delta_ms: float):
@@ -2131,7 +2162,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.77"
+APP_VERSION = "3.0.78"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

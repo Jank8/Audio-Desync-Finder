@@ -1873,8 +1873,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         warnings.append(
             f"Jump at {format_timecode(gap_at)} needs {gap_ms / 1000.0:.1f} s of "
             "silence: the target is missing that content, not shifted.")
-    if (len(jumps) >= 2 or drift_ms >= 1500.0 or worst_rms > 80.0
-            or gap_ms >= 500.0):
+    # A wide RMS is what a different dub looks like: the envelope of the other
+    # language scatters by design.  It belongs in the report, not in a claim
+    # that the release is wrong - the cuts, the drift and the missing seconds
+    # are the real evidence.
+    if len(jumps) >= 2 or drift_ms >= 1500.0 or gap_ms >= 500.0:
         plan_mismatch = {"edits": len(jumps), "drift_ms": round(drift_ms, 1),
                          "rms": round(worst_rms, 1), "gap_ms": round(gap_ms, 1),
                          "gap_at": round(gap_at, 1)}
@@ -2272,7 +2275,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.95"
+APP_VERSION = "3.0.96"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

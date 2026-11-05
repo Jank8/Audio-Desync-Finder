@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.96 / 2.0.96
+
+- **A wide RMS no longer means "wrong release".** The large notice fired when a
+  segment fit worse than 80 ms RMS, which is simply what a different dub looks
+  like - the envelope of the other language scatters by design. The notice needs
+  evidence now: two or more cuts, 1.5 s of drift, or half a second of missing
+  audio. The RMS is still named in the sentence when it does fire.
+
 ## 3.0.95 / 2.0.95
 
 - **Vertical dragging follows the pointer.** Matplotlib reports `event.y` with

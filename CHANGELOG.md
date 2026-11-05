@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.83 / 2.0.83
+
+- **A split has to beat the noise.** On the Smurfs pair the model broke the
+  timeline at 1:07 for a 62.8 ms difference while that segment's own RMS was
+  65 ms - a cut smaller than the measurement scatter, which produced a pointless
+  edit point and 62 ms of inserted silence. Both split passes now need a
+  difference of at least max(25 ms / 40 ms, 2 x the segment's RMS).
+- Measured: the noisy 63 ms step stays one segment with no jumps; a clean
+  300 ms step still splits; the clean 34 ms weak tail in Cloudy still splits.
+
 ## 3.0.82 / 2.0.82
 
 - **The axis title has room again.** The rotated timecode labels of 3.0.80 were

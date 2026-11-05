@@ -1628,7 +1628,11 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
         values = np.array([float(p["offset"]) for p in tail]) if tail else np.array([])
         level = float(np.median(values)) if len(values) else 0.0
         spread = float(np.median(np.abs(values - level))) if len(values) else 1e9
+        at_model = float(seg["offset"]) + float(seg["slope"]) * (last - float(seg["t_start"]))
+        # a difference smaller than the scatter of the segment is not a level
+        noise = max(40.0, 2.0 * float(seg["rms"]))
         if (len(tail) < 8 or spread > 50.0
+                or abs(level - at_model) < noise
                 or float(tail[-1]["t"]) - float(tail[0]["t"]) < 120.0):
             # nothing good enough to place a level: leave the segment covering
             # the film - a truncated model would cut the exported audio
@@ -1655,7 +1659,8 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
             spread = float(np.median(np.abs(values - level)))
             at_start = float(last_seg["offset"]) + float(last_seg["slope"]) * (
                 float(run[0]["t"]) - float(last_seg["t_start"]))
-            if spread <= 50.0 and abs(level - at_start) >= 25.0:
+            noise = max(25.0, 2.0 * float(last_seg["rms"]))
+            if spread <= 50.0 and abs(level - at_start) >= noise:
                 start = float(run[0]["t"])
                 tail_seg = {"t_start": start,
                             "t_end": float(last_seg["t_end"]),
@@ -2198,7 +2203,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.82"
+APP_VERSION = "3.0.83"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

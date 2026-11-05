@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.89"
+APP_VERSION = "2.0.90"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4306,6 +4306,9 @@ class TimelinePanel:
         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_box)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         self.canvas.mpl_connect("button_press_event", self._on_chart_click)
+        self.canvas.mpl_connect("button_press_event", self._pan_start)
+        self.canvas.mpl_connect("motion_notify_event", self._pan_move)
+        self.canvas.mpl_connect("button_release_event", self._pan_end)
         self.canvas.get_tk_widget().bind("<Control-MouseWheel>", self._on_zoom)
         self._draw()
 
@@ -5063,13 +5066,45 @@ class TimelinePanel:
             pass
 
     def _on_chart_click(self, event) -> None:
-        """Single click on the chart measures the offset at that timestamp."""
+        """A click that did not turn into a drag measures at that timestamp."""
         if event.inaxes is not self.ax or event.xdata is None:
             return
         if self.worker is not None and self.worker.is_alive():
             return
-        self._start(lambda: self._task_measure(float(event.xdata)),
-                    f"Measuring at {event.xdata:.1f}s…")
+        # the drag handlers decide: a click that moved the plot is not a click
+        self._pending_click = float(event.xdata)
+
+    def _pan_start(self, event) -> None:
+        if getattr(event, "button", None) != 1 or event.inaxes is not self.ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        self._pan = {"x": float(event.xdata), "y": float(event.ydata),
+                     "xlim": self.ax.get_xlim(), "ylim": self.ax.get_ylim(),
+                     "moved": False}
+
+    def _pan_move(self, event) -> None:
+        pan = getattr(self, "_pan", None)
+        if pan is None or event.xdata is None or event.ydata is None:
+            return
+        dx = pan["x"] - float(event.xdata)
+        dy = pan["y"] - float(event.ydata)
+        if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+            pan["moved"] = True
+        self.ax.set_xlim(pan["xlim"][0] + dx, pan["xlim"][1] + dx)
+        self.ax.set_ylim(pan["ylim"][0] + dy, pan["ylim"][1] + dy)
+        self.canvas.draw_idle()
+
+    def _pan_end(self, event) -> None:
+        pan = getattr(self, "_pan", None)
+        self._pan = None
+        pending = getattr(self, "_pending_click", None)
+        self._pending_click = None
+        if pan is not None and pan.get("moved"):
+            return                      # that was a drag, not a measurement
+        if pending is not None and self.worker is None:
+            self._start(lambda: self._task_measure(float(pending)),
+                        f"Measuring at {pending:.1f}s…")
 
     def apply_responsive(self, width: int, height: int) -> None:
         """Reflow the panel when the main window changes size."""

@@ -2270,7 +2270,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.89"
+APP_VERSION = "3.0.90"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2582,6 +2582,9 @@ class MainWindow(FluentWindow):
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.mpl_connect("scroll_event", self._zoom_at)
+        self.canvas.mpl_connect("button_press_event", self._pan_start)
+        self.canvas.mpl_connect("motion_notify_event", self._pan_move)
+        self.canvas.mpl_connect("button_release_event", self._pan_end)
         self.canvas.setStyleSheet("background:transparent;")
         row = QHBoxLayout()
         row.addWidget(self.canvas, 3)
@@ -3271,6 +3274,29 @@ class MainWindow(FluentWindow):
             pass
         ax.set_ylabel("Offset (ms)", color=self.chart_fg, fontsize=8)
         self.canvas.draw_idle()
+
+    def _pan_start(self, event):
+        """Left button down: remember where the view started."""
+        if getattr(event, "button", None) != 1 or event.inaxes is None:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        self._pan = {"x": float(event.xdata), "y": float(event.ydata),
+                     "xlim": self.ax.get_xlim(), "ylim": self.ax.get_ylim()}
+
+    def _pan_move(self, event):
+        """Mouse drag moves the plot with the pointer."""
+        pan = getattr(self, "_pan", None)
+        if pan is None or event.xdata is None or event.ydata is None:
+            return
+        dx = pan["x"] - float(event.xdata)
+        dy = pan["y"] - float(event.ydata)
+        self.ax.set_xlim(pan["xlim"][0] + dx, pan["xlim"][1] + dx)
+        self.ax.set_ylim(pan["ylim"][0] + dy, pan["ylim"][1] + dy)
+        self.canvas.draw_idle()
+
+    def _pan_end(self, event):
+        self._pan = None
 
     def _zoom_at(self, event):
         """Ctrl + wheel zooms the plot around the pointer."""

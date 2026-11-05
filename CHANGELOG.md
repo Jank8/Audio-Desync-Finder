@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.90 / 2.0.90
+
+- **Drag to pan.** Holding the left mouse button on the chart moves the view with
+  the pointer, in both builds, next to the Ctrl + wheel zoom. In Tk a click that
+  did not move still measures at that timestamp; a drag no longer drops a point
+  by accident.
+
 ## 3.0.89 / 2.0.89
 
 - **Level changes are found against local medians.** The Smurfs pair sits at

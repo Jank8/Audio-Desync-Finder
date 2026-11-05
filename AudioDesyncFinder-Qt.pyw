@@ -1984,9 +1984,12 @@ def chart_ylim(points, minimum_span: float = 60.0):
     if values.size == 0:
         return None
     lo, hi = (float(v) for v in np.percentile(values, [5.0, 95.0]))
+    # zero is the reference track: it has to stay on screen, otherwise a film
+    # that is a second late looks like a flat line with no distance to anything
+    lo, hi = min(lo, 0.0), max(hi, 0.0)
     span = max(float(minimum_span), hi - lo)
     mid = 0.5 * (lo + hi)
-    pad = max(20.0, span * 0.18)
+    pad = max(20.0, span * 0.12)
     return mid - span / 2.0 - pad, mid + span / 2.0 + pad
 
 
@@ -2233,7 +2236,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.84"
+APP_VERSION = "3.0.85"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

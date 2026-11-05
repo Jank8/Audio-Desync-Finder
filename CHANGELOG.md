@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.85 / 2.0.85
+
+- **The reference is always on screen.** Zero is the reference track, but the
+  chart range came from the 5th..95th percentile of the offsets, so with a
+  target a second or ten seconds off the zero line fell outside the view and
+  the cloud looked like it had no distance to anything. The range now always
+  includes zero; the percentile logic still keeps junk points from stretching
+  it.
+
 ## 3.0.84 / 2.0.84
 
 - **The unmistakable matches decide the offset.** Every measurement already

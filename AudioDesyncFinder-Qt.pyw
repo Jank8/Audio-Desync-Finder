@@ -1495,7 +1495,9 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
                          float(np.median(np.abs(after - med_after))))
             step = abs(med_after - med_before - base_slope * (
                 float(usable[i]["t"]) - float(usable[i - 1]["t"])))
-            if step >= max(100.0, 3.0 * spread):
+            # 125 ms of level change is within what a single delay still
+            # handles, so the bar sits at 150 ms and four spreads
+            if step >= max(150.0, 4.0 * spread):
                 candidates.append((step, i))
         if candidates:
             # one break per cluster of neighbouring candidates, the strongest one
@@ -2270,7 +2272,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.90"
+APP_VERSION = "3.0.91"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 

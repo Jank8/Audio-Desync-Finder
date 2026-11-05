@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.91 / 2.0.91
+
+- **A 125 ms level change is not a cut.** 3.0.89 split the Smurfs pair at the
+  hour mark, but a single delay muxes that film fine, so the bar for the local
+  median break moves from 100 ms / 3 spreads to 150 ms / 4 spreads. A real edit
+  (200 ms and up) still splits.
+
 ## 3.0.90 / 2.0.90
 
 - **Drag to pan.** Holding the left mouse button on the chart moves the view with

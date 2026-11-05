@@ -3,6 +3,12 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.92 / 2.0.92
+
+- **The legend sits in the free strip at the bottom of the chart card.** It is
+  anchored in figure coordinates now, below the "Film time" title, so it uses
+  the space the card already had instead of taking height away from the plot.
+
 ## 3.0.91 / 2.0.91
 
 - **A 125 ms level change is not a cut.** 3.0.89 split the Smurfs pair at the

@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.91"
+APP_VERSION = "2.0.92"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -5037,9 +5037,10 @@ class TimelinePanel:
                                   markersize=5))
             labels.append("on the model")
             if handles:
-                ax.legend(handles, labels, loc="upper center",
-                          bbox_to_anchor=(0.5, -0.30), ncol=4, fontsize=7,
-                          frameon=False, labelcolor="white")
+                ax.legend(handles, labels, loc="lower center",
+                          bbox_to_anchor=(0.5, 0.005), ncol=4, fontsize=7,
+                          frameon=False, labelcolor="white",
+                          bbox_transform=self.fig.transFigure)
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)
@@ -5054,7 +5055,7 @@ class TimelinePanel:
                     lambda value, _pos: format_timecode(value)))
             ax.set_xlabel("Film time", color="white", fontsize=8)
             try:
-                self.fig.subplots_adjust(bottom=0.34, left=0.11,
+                self.fig.subplots_adjust(bottom=0.30, left=0.11,
                                                   right=0.985, top=0.97)
             except Exception:
                 pass

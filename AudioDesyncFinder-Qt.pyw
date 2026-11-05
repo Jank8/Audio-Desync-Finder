@@ -2272,7 +2272,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.91"
+APP_VERSION = "3.0.92"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3247,9 +3247,10 @@ class MainWindow(FluentWindow):
             handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
                                   markersize=5))
             labels.append("on the model")
-            ax.legend(handles, labels, loc="upper center",
-                      bbox_to_anchor=(0.5, -0.30), ncol=4, fontsize=7,
-                      frameon=False, labelcolor=self.chart_fg)
+            ax.legend(handles, labels, loc="lower center",
+                      bbox_to_anchor=(0.5, 0.005), ncol=4, fontsize=7,
+                      frameon=False, labelcolor=self.chart_fg,
+                      bbox_transform=self.canvas.figure.transFigure)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)
@@ -3270,7 +3271,7 @@ class MainWindow(FluentWindow):
         # rotated timecode labels need their own strip, otherwise the axis
         # title is clipped by the canvas edge
         try:
-            self.canvas.figure.subplots_adjust(bottom=0.34, left=0.10,
+            self.canvas.figure.subplots_adjust(bottom=0.30, left=0.10,
                                                right=0.985, top=0.97)
         except Exception:
             pass

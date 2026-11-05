@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.87"
+APP_VERSION = "2.0.88"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -658,6 +658,7 @@ def _import_scientific_stack() -> None:
     matplotlib.use('TkAgg')
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 
@@ -4926,6 +4927,12 @@ class TimelinePanel:
             else tk.DISABLED)
         self._draw()
 
+    def _segment_at(self, t):
+        for seg in (self.plan or {}).get("segments", []):
+            if seg["t_start"] - 1.0 <= t <= seg["t_end"] + 1.0:
+                return seg
+        return None
+
     def _draw(self) -> None:
         ax = self.ax
         try:
@@ -4935,8 +4942,18 @@ class TimelinePanel:
                 min_conf = self._conf()
                 colours = []
                 for p in points:
+                    seg = self._segment_at(p["t"])
+                    on_model = False
+                    if seg is not None:
+                        model = float(seg["offset"]) + float(seg["slope"]) * (
+                            float(p["t"]) - float(seg["t_start"]))
+                        tolerance = max(8.0, min(30.0,
+                                                 0.5 * float(seg.get("rms") or 0.0)))
+                        on_model = abs(float(p["offset"]) - model) <= tolerance
                     if not p.get("enabled", True):
                         colours.append("#555555")          # disabled by the user
+                    elif on_model:
+                        colours.append("#ff5a5f")          # sits on the model
                     elif float(p.get("conf", p.get("ncc", 0))) < min_conf:
                         colours.append("#b05a00")          # measured, but rejected
                     else:
@@ -4960,9 +4977,12 @@ class TimelinePanel:
             ax.axhline(0.0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
                        label="reference (0 ms)")
             handles, labels = ax.get_legend_handles_labels()
+            handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
+                                  markersize=5))
+            labels.append("on the model")
             if handles:
-                ax.legend(loc="upper right", fontsize=7, framealpha=0.0,
-                          labelcolor="white")
+                ax.legend(handles, labels, loc="upper right", fontsize=7,
+                          framealpha=0.0, labelcolor="white")
             limits = chart_ylim(points) if points else None
             if limits:
                 ax.set_ylim(*limits)

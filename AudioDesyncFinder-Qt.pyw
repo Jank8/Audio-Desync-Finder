@@ -112,6 +112,7 @@ import shutil
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 # ---- engine (inlined, was sync_engine.py) ----
@@ -2236,7 +2237,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.87"
+APP_VERSION = "3.0.88"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3164,6 +3165,25 @@ class MainWindow(FluentWindow):
             isClosable=True, position=InfoBarPosition.TOP_RIGHT,
             duration=4000, parent=self)
 
+    def _segment_at(self, t):
+        for seg in (self.plan or {}).get("segments", []):
+            if seg["t_start"] - 1.0 <= t <= seg["t_end"] + 1.0:
+                return seg
+        return None
+
+    def _point_colour(self, point):
+        """Red when the measurement sits on the model, accent when it does not."""
+        seg = self._segment_at(point["t"])
+        if seg is None:
+            return self.accent
+        model = float(seg["offset"]) + float(seg["slope"]) * (
+            float(point["t"]) - float(seg["t_start"]))
+        # how close counts as "on the line" follows the fit's own scatter
+        tolerance = max(8.0, min(30.0, 0.5 * float(seg.get("rms") or 0.0)))
+        if abs(float(point["offset"]) - model) <= tolerance:
+            return "#ff5a5f"
+        return self.accent
+
     def _draw(self):
         ax = self.ax
         ax.clear()
@@ -3171,8 +3191,8 @@ class MainWindow(FluentWindow):
         if self.points:
             ax.scatter([p["t"] for p in self.points],
                        [p["offset"] for p in self.points],
-                       s=8, color=self.accent, alpha=0.9,
-                       label="target (measured)")
+                       s=10, c=[self._point_colour(p) for p in self.points],
+                       alpha=0.9, label="target (measured)")
         first = True
         for seg in (self.plan or {}).get("segments", []):
             x0, x1 = seg["t_start"], seg["t_end"]
@@ -3184,8 +3204,12 @@ class MainWindow(FluentWindow):
         ax.axhline(0, color="#c8c8c8", lw=1.3, ls="--", alpha=0.9,
                    label="reference (0 ms)")
         if self.points or self.plan:
-            ax.legend(loc="upper right", fontsize=7, framealpha=0.0,
-                      labelcolor=self.chart_fg)
+            handles, labels = ax.get_legend_handles_labels()
+            handles.append(Line2D([], [], marker="o", ls="", color="#ff5a5f",
+                                  markersize=5))
+            labels.append("on the model")
+            ax.legend(handles, labels, loc="upper right", fontsize=7,
+                      framealpha=0.0, labelcolor=self.chart_fg)
         limits = chart_ylim(self.points) if self.points else None
         if limits:
             ax.set_ylim(*limits)

@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.88 / 2.0.88
+
+- **The measurements that sit on the model are red.** A point is red when it is
+  within half the segment's RMS of the fitted line (never less than 8 ms, never
+  more than 30 ms) - that is the set the offset is actually built from -
+  everything else keeps the accent colour. The legend gained "on the model", so
+  the chart now answers "is the film really in sync at this moment" at a glance.
+
 ## 3.0.87 / 2.0.87
 
 - **The chart says what it draws.** A legend now names the three things on it:

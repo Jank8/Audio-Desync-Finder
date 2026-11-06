@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.5 / 2.1.5
+
+- **Preview works before the first scan.** The button no longer waits for a plan:
+  with nothing measured it plays the two files with no correction at all
+  (`offset +0 ms, atempo 1.000000`), which is the quickest way to decide whether a
+  pair is worth scanning at all. It only needs both files picked.
+
 ## 3.1.4 / 2.1.4
 
 - **The last 20 scans are remembered, per pair and per settings.** The key holds

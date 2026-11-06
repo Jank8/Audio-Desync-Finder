@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4951,6 +4951,18 @@ class TimelinePanel:
                    f"{'envelope' if result.get('mode') == 'e' else 'waveform'})")
         self._post("idle", None)
 
+    def _preview_plan(self):
+        """The plan the preview uses; before a scan that is a flat zero."""
+        variant = self._export_plan_variant() or {}
+        if variant.get("segments"):
+            return variant
+        duration = float((self.meta or {}).get("ref_duration") or 0.0)
+        return {"segments": [{"t_start": 0.0, "t_end": max(duration, 1.0),
+                              "offset": 0.0, "slope": 0.0, "atempo": 1.0,
+                              "n": 0, "rms": 0.0}],
+                "jumps": [], "initial_offset": 0.0, "duration": duration,
+                "warnings": []}
+
     def _export_plan_variant(self):
         """The plan the export uses: the model, or a simple offset/tempo fix."""
         plan = self.plan or {}
@@ -5104,13 +5116,13 @@ class TimelinePanel:
 
     def preview(self) -> None:
         """Render a short window and hand it to the system player."""
-        if not self.plan or not self.meta:
-            messagebox.showwarning("Preview", "Run a scan first – no plan yet.",
+        if not (self.ref_path and self.target_path):
+            messagebox.showwarning("Preview", "Pick both files first.",
                                    parent=self.frame)
             return
         x0, x1 = self.ax.get_xlim()
         centre = max(0.0, 0.5 * (float(x0) + float(x1)))
-        plan = self._export_plan_variant()
+        plan = self._preview_plan()
 
         def work():
             path = preview_clip(self.ref_path, self.target_path, plan,

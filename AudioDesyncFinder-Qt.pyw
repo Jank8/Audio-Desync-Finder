@@ -2442,7 +2442,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.4"
+APP_VERSION = "3.1.5"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3050,7 +3050,7 @@ class MainWindow(FluentWindow):
         self.btn_preview = PushButton("▶  Preview")
         self.btn_preview.setToolTip(
             "Play the reference picture with the target sound, corrected")
-        self.btn_preview.setEnabled(False)
+        self.btn_preview.setEnabled(_HAVE_PLAYER)
         self.btn_preview.clicked.connect(self.preview)
         footer.addWidget(self.btn_preview)
         self.btn_export = PrimaryPushButton("⬇  Export corrected audio…")
@@ -3340,15 +3340,36 @@ class MainWindow(FluentWindow):
         finally:
             self.ui_queue.put(("idle", None))
 
+    def _preview_plan(self):
+        """
+        The plan the preview plays, or a flat zero plan before a scan.
+
+        Previewing before measuring is the point: listen to the two files with no
+        correction at all and decide whether they are worth scanning.
+        """
+        variant = self._export_plan_variant() or {}
+        if variant.get("segments"):
+            return variant
+        duration = float((self.meta or {}).get("ref_duration") or 0.0)
+        return {"segments": [{"t_start": 0.0, "t_end": max(duration, 1.0),
+                              "offset": 0.0, "slope": 0.0, "atempo": 1.0,
+                              "n": 0, "rms": 0.0}],
+                "jumps": [], "initial_offset": 0.0, "duration": duration,
+                "warnings": []}
+
     def preview(self):
         """Open the player at the middle of what the chart currently shows."""
-        if not self.plan or not _HAVE_PLAYER:
+        if not _HAVE_PLAYER:
+            show_message("Preview", "This build has no QtMultimedia player.")
+            return
+        if not (self.ref_path and self.tgt_path):
+            show_message("Preview", "Pick both files first.")
             return
         ref_path, tgt_path = self._ordered_paths()
         x0, x1 = self.ax.get_xlim()
         centre = max(0.0, 0.5 * (float(x0) + float(x1)))
         dialog = PreviewDialog(self, ref_path, tgt_path,
-                               self._export_plan_variant, centre)
+                               self._preview_plan, centre)
         dialog.exec()
 
     def export_audio(self):
@@ -3363,7 +3384,6 @@ class MainWindow(FluentWindow):
         path = mka_path(path)
         self.stop_event.clear()          # a previous Stop must not cancel this
         self.btn_export.setEnabled(False)
-        self.btn_preview.setEnabled(False)
         self.btn_stop.setEnabled(True)
         threading.Thread(target=self._export_task, args=(path,), daemon=True).start()
 
@@ -3478,8 +3498,7 @@ class MainWindow(FluentWindow):
                 self._update_summary()
                 self._draw()
                 self.btn_export.setEnabled(bool(payload.get("segments")))
-                self.btn_preview.setEnabled(
-                    bool(payload.get("segments")) and _HAVE_PLAYER)
+
             elif kind == "idle":
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)
@@ -3656,7 +3675,7 @@ class MainWindow(FluentWindow):
         self._draw()
         self._fill_table()
         self.btn_export.setEnabled(bool(plan.get("segments")))
-        self.btn_preview.setEnabled(bool(plan.get("segments")) and _HAVE_PLAYER)
+        self.btn_preview.setEnabled(_HAVE_PLAYER)
 
     def _notify(self, title, content, ok=True):
         (InfoBar.success if ok else InfoBar.error)(

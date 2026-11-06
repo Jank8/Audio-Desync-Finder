@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4070,12 +4070,12 @@ def preview_clip(ref_path: str, tgt_path: str, plan: dict, start_s: float,
     ]
     if has_video:
         command += ["-map", "0:v:0", "-map", "1:a:0",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24"]
     else:
         command += ["-map", "1:a:0", "-vn"]
     command += [
         "-af", f"atempo={rate:.8f},aresample=48000",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", out_path,
+        "-c:a", "aac", "-b:a", "160k", "-shortest", out_path,
     ]
     result = subprocess.run(command, capture_output=True, text=True,
                             startupinfo=get_startupinfo(), timeout=180)
@@ -4995,7 +4995,8 @@ class TimelinePanel:
         plan = self._export_plan_variant()
 
         def work():
-            path = preview_clip(self.ref_path, self.target_path, plan, centre)
+            path = preview_clip(self.ref_path, self.target_path, plan,
+                                centre, span_s=15.0)
             self._post("status", f"Preview at {format_timecode(centre)} – opening…")
             try:
                 os.startfile(path)

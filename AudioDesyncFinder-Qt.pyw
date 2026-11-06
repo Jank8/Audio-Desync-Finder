@@ -2345,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2543,8 +2543,6 @@ class PreviewDialog(QDialog):
         self.tgt_path = tgt_path
         self.plan_getter = plan_getter
         self.start = max(0.0, float(start_s))
-        self._result = None
-        self._pending = self.start
         self._live = _HAVE_PLAYER
         self._offset0 = 0.0
         self._slope = 0.0
@@ -2593,8 +2591,6 @@ class PreviewDialog(QDialog):
 
         self._sync = QTimer(self)
         self._sync.timeout.connect(self._keep_sync)
-        self._poll = QTimer(self)
-        self._poll.timeout.connect(self._check)
 
         if self._live:
             self.ref_player.setSource(QUrl.fromLocalFile(ref_path))
@@ -2603,7 +2599,8 @@ class PreviewDialog(QDialog):
             self.tgt_player.errorOccurred.connect(self._on_error)
             self._seek_to(self.start)
         else:
-            self._render(self.start)
+            self.status.setText(
+                "QtMultimedia is missing - this build cannot preview.")
 
     # ---- the plan decides where the sound has to start and how fast --------
     def _segment_at(self, t):
@@ -2650,7 +2647,8 @@ class PreviewDialog(QDialog):
                 f"offset {self._offset_at(self.start):+.0f} ms, "
                 f"atempo {self._atempo:.6f}")
         else:
-            self._render(self.start)
+            self.status.setText(
+                "QtMultimedia is missing - this build cannot preview.")
 
     def _keep_sync(self):
         if not self._live or self.ref_player.playbackState() != QMediaPlayer.PlayingState:
@@ -2684,44 +2682,10 @@ class PreviewDialog(QDialog):
             self.btn_play.setText("⏸ Pause")
 
     def _on_error(self, *_args):
-        if self._live:
-            self._live = False
-            self._sync.stop()
-            self._render(self.start)
-
-    # ---- fallback: render the window and play the file ---------------------
-    def _render(self, start):
-        self.start = max(0.0, float(start))
-        self._pending = self.start
-        self._result = None
+        self._live = False
+        self._sync.stop()
         self.status.setText(
-            f"Rendering {self.SPAN:.0f} s at {format_timecode(self.start)}…")
-        plan = self.plan_getter()
-        ref_path, tgt_path = self.ref_path, self.tgt_path
-
-        def work():
-            try:
-                self._result = (preview_clip(ref_path, tgt_path, plan,
-                                             self._pending, self.SPAN), None)
-            except Exception as exc:
-                self._result = (None, exc)
-
-        threading.Thread(target=work, daemon=True).start()
-        self._poll.start(100)
-
-    def _check(self):
-        if self._result is None:
-            return
-        path, error = self._result
-        self._result = None
-        self._poll.stop()
-        if error is not None:
-            self.status.setText(f"Preview failed: {error}")
-            return
-        self.ref_player.setSource(QUrl.fromLocalFile(path))
-        self.ref_player.play()
-        self.status.setText(f"{format_timecode(self.start)} + {self.SPAN:.0f} s")
-
+            "Qt cannot play this file - preview needs the FFmpeg media backend.")
 
 class MainWindow(FluentWindow):
     def __init__(self):

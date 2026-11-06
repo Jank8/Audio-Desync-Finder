@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.1 / 2.1.1
+
+- **The preview renders nothing.** The render fallback is gone: it encoded 30 s
+  with libx264 and could pin the machine, while the live players cover the real
+  case. If Qt cannot decode the file the window says so instead of starting an
+  encode.
+- Tk, which has no video widget, still renders its short clip, but lighter:
+  15 s, ultrafast, crf 24, aac 160k.
+
 ## 3.1.0 / 2.1.0
 
 - **The preview plays both files at once instead of rendering.** The reference

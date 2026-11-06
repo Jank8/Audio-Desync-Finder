@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.9 / 2.1.9
+
+- **The preview slider no longer stutters.** Dragging the handle used to seek
+  both players *and* start them on every pixel, while the sync timer kept pulling
+  the sound back into place - the result was a fight between the drag and the
+  playback. The handle now takes the players off the clock (pause, timer
+  stopped), moves only the position while dragged, and resumes on release with
+  the sound already where the handle is.
+- The Offset and FPS tempo export checkboxes are gone: the export always uses
+  the fitted model again.
+- Point measurement keeps using the Cores pool.
+
 ## 3.1.8 / 2.1.8
 
 - **All cores but two, everywhere.** Cores already defaulted to `cpu_count - 2`

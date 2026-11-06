@@ -2475,7 +2475,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.8"
+APP_VERSION = "3.1.9"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2717,6 +2717,8 @@ class PreviewDialog(QDialog):
         self.btn_close.clicked.connect(self.close)
         self.btn_play.clicked.connect(self._toggle)
         self.slider.sliderMoved.connect(self._scrub)
+        self.slider.sliderPressed.connect(self._scrub_start)
+        self.slider.sliderReleased.connect(self._scrub_end)
         self.ref_player.positionChanged.connect(self._on_position)
 
         self._sync = QTimer(self)
@@ -2781,6 +2783,8 @@ class PreviewDialog(QDialog):
                 "QtMultimedia is missing - this build cannot preview.")
 
     def _keep_sync(self):
+        if getattr(self, "_scrubbing", False):
+            return
         if not self._live or self.ref_player.playbackState() != QMediaPlayer.PlayingState:
             return
         t = self.ref_player.position() / 1000.0
@@ -2802,8 +2806,36 @@ class PreviewDialog(QDialog):
         plan = self.plan_getter() or {}
         return max(1.0, float(plan.get("duration") or 1.0))
 
+    def _scrub_start(self):
+        """Take the players off the clock while the handle is being dragged."""
+        self._scrubbing = True
+        self._was_playing = (self.ref_player.playbackState()
+                             == QMediaPlayer.PlayingState)
+        self._sync.stop()
+        self.ref_player.pause()
+        self.tgt_player.pause()
+
     def _scrub(self, value):
-        self._seek_to(self._total_duration() * value / 1000.0)
+        """Moving the handle only moves the position - no play, no re-sync."""
+        self._seek_only(self._total_duration() * value / 1000.0)
+
+    def _scrub_end(self):
+        self._scrubbing = False
+        if getattr(self, "_was_playing", False):
+            self.ref_player.play()
+            self.tgt_player.play()
+            self._sync.start(400)
+
+    def _seek_only(self, t):
+        self.start = max(0.0, min(float(t), self._total_duration()))
+        self._apply_plan_at(self.start)
+        self.ref_player.setPosition(int(self.start * 1000))
+        audio_at = max(0.0, self.start + self._offset_at(self.start) / 1000.0)
+        self.tgt_player.setPosition(int(audio_at * 1000))
+        self.status.setText(
+            f"{format_timecode(self.start)} / "
+            f"{format_timecode(self._total_duration())}  ·  "
+            f"offset {self._offset_at(self.start):+.0f} ms")
 
     def _toggle(self):
         playing = self.ref_player.playbackState() == QMediaPlayer.PlayingState

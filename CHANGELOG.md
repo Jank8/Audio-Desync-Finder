@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.15 / 2.1.15
+
+- **A short step is called out.** `Step` far below `Window` (step < window / 3)
+  means every measurement averages the same audio many times over: a sharp cut
+  smears across many overlapping points and the break detector starts splitting
+  the film - 80 / 10 turned one film into 86 segments with an RMS of 243 ms. The
+  scan now says so in the log and names the sane range (80 / 30 measures clean).
+
 ## 3.1.14 / 2.1.14
 
 - **`Play from here`.** Select a measurement in the table and the new button

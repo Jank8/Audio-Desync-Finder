@@ -2502,7 +2502,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.14"
+APP_VERSION = "3.1.15"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3372,6 +3372,17 @@ class MainWindow(FluentWindow):
         try:
             ref_path, tgt_path = self._ordered_paths()
             self.ui_queue.put(("log", "── Scan started ─────────────"))
+            _win = self._num(self.entry_window, 80)
+            _step = self._num(self.entry_step, 30)
+            self.ui_queue.put(("log", (
+                f"Blocks of {_win:.0f} s every {_step:.0f} s.")))
+            if _step * 3.0 < _win:
+                self.ui_queue.put(("log", (
+                    f"Step {_step:.0f} s is far below the {_win:.0f} s window: "
+                    "each measurement then averages the same audio many times "
+                    "over, a sharp cut smears across all of them and the model "
+                    "splits the film for no reason. Keep the step near a third "
+                    "of the window - 80 / 30 works.")))
             scan_t0 = time.time()
             # the settings first: an identical earlier scan can be replayed
             # without decoding anything

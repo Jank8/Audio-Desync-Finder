@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.14"
+APP_VERSION = "2.1.15"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4820,6 +4820,14 @@ class TimelinePanel:
 
     def _task_scan(self) -> None:
         console_log("── Timeline scan started ─────────────────────", "bold")
+        _win, _step = self._window(), self._step()
+        console_log(f"Blocks of {_win:.0f} s every {_step:.0f} s.", "info")
+        if _step * 3.0 < _win:
+            console_log(f"Step {_step:.0f} s is far below the {_win:.0f} s window: "
+                        "each measurement averages the same audio many times over, "
+                        "a sharp cut smears across all of them and the model splits "
+                        "the film for no reason. Keep the step near a third of the "
+                        "window - 80 / 30 works.", "warn")
         self._post("status", "Decoding audio…")
         self._scan_t0 = time.time()
         # the settings first: an identical earlier scan can be replayed

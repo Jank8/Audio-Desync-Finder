@@ -3,6 +3,19 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.4 / 2.1.4
+
+- **The last 20 scans are remembered, per pair and per settings.** The key holds
+  both files (name, size, time) and every setting that shapes the result - Window,
+  Step, Min confidence, Signal, Tempo and the framerate hint - so the same pair
+  with different settings is a different entry. Asking again with the same pair
+  and the same settings replays the stored points and plan in ~0.2 s instead of
+  decoding and measuring for minutes: "Loaded the stored result - same pair, same
+  settings."
+- The store keeps 20 entries (200 MB cap, least recently used go first) in
+  `%LOCALAPPDATA%\AudioDesyncFinder\results`, and "Clear cache" empties it
+  together with the decoded audio.
+
 ## 3.1.3 / 2.1.3
 
 - **The export no longer re-encodes the film for a few milliseconds.** The

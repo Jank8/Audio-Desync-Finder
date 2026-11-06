@@ -679,23 +679,120 @@ def clear_decoded_cache():
     """
     freed = 0
     removed = 0
-    try:
-        names = os.listdir(_cache_dir())
-    except OSError:
-        return 0, 0
-    for name in names:
-        if not name.endswith((".pcm", ".tmp")):
-            continue
-        path = os.path.join(_cache_dir(), name)
+    for folder, suffixes in ((_cache_dir(), (".pcm", ".tmp")),
+                             (_result_dir(), (".json",))):
         try:
-            size = os.path.getsize(path)
-            os.remove(path)
+            names = os.listdir(folder)
         except OSError:
             continue
-        freed += size
-        removed += 1
+        for name in names:
+            if not name.endswith(suffixes):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+            except OSError:
+                continue
+            freed += size
+            removed += 1
     return freed, removed
 
+
+RESULT_KEEP = 20          # remembered scans on disk
+RESULT_LIMIT_BYTES = 200 * 1024 ** 2
+
+
+def _result_dir() -> str:
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return os.path.join(base, "AudioDesyncFinder", "results")
+
+
+def result_key(ref_path, tgt_path, window, step, min_conf, mode, allow_drift,
+               hint):
+    """
+    Identity of one exact scan: both files and every setting that shapes it.
+
+    Decoding already remembers each file; this remembers the *answer*, so asking
+    the same question twice (same pair, same settings) does not measure the film
+    again.  Cores are left out on purpose - they change the speed, not the result.
+    """
+    return [repr(track_key(ref_path)), repr(track_key(tgt_path)),
+            round(float(window), 3), round(float(step), 3),
+            round(float(min_conf), 3), str(mode), bool(allow_drift),
+            None if hint is None else round(float(hint), 4)]
+
+
+def _result_file(key) -> str:
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_result_dir(), f"scan-{digest}.json")
+
+
+def load_result(key):
+    """The points and plan of an identical earlier scan, or None."""
+    if not key:
+        return None
+    path = _result_file(key)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if payload.get("key") != key:
+        return None
+    points = payload.get("points")
+    plan = payload.get("plan")
+    if not isinstance(points, list) or not isinstance(plan, dict):
+        return None
+    if not plan.get("segments"):
+        return None
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+    return points, plan
+
+
+def save_result(key, points, plan) -> None:
+    """Remember this scan so the same question can be answered instantly."""
+    if not key or not plan or not plan.get("segments"):
+        return
+    try:
+        os.makedirs(_result_dir(), exist_ok=True)
+        path = _result_file(key)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"key": key, "points": points, "plan": plan},
+                      handle, default=float)
+    except (OSError, ValueError, TypeError):
+        return
+    _prune_results()
+
+
+def _prune_results() -> None:
+    try:
+        entries = []
+        for name in os.listdir(_result_dir()):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(_result_dir(), name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            entries.append((stat.st_mtime, stat.st_size, path))
+    except OSError:
+        return
+    entries.sort()
+    total = sum(entry[1] for entry in entries)
+    while entries and (len(entries) > RESULT_KEEP or total > RESULT_LIMIT_BYTES):
+        _mtime, size, path = entries.pop(0)
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
 
 def _prune_cache() -> None:
     """Keep one pair: at most CACHE_KEEP_FILES files, under the byte limit."""
@@ -2345,7 +2442,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.3"
+APP_VERSION = "3.1.4"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3115,6 +3212,32 @@ class MainWindow(FluentWindow):
             ref_path, tgt_path = self._ordered_paths()
             self.ui_queue.put(("log", "── Scan started ─────────────"))
             scan_t0 = time.time()
+            # the settings first: an identical earlier scan can be replayed
+            # without decoding anything
+            mode = ("auto" if self.combo_signal.currentIndex() == 0
+                    else "waveform" if self.combo_signal.currentIndex() == 1
+                    else "envelope")
+            step = self._num(self.entry_step, 30)
+            window_size = self._num(self.entry_window, 80)
+            hint = self._fps_hint()
+            # a tempo difference needs a framerate difference to exist at all;
+            # the checkbox covers the rare file that ignores that rule
+            fps_ref, fps_tgt = probe_framerate(ref_path), probe_framerate(tgt_path)
+            allow_drift = (self.chk_tempo.isChecked()
+                           or framerate_differs(fps_ref, fps_tgt))
+            self.allow_drift = allow_drift
+            result_key_value = result_key(ref_path, tgt_path, window_size, step,
+                                          self._num(self.entry_conf, 2), mode,
+                                          allow_drift, hint)
+            stored = load_result(result_key_value)
+            if stored is not None and not self.stop_event.is_set():
+                points, plan = stored
+                self.ui_queue.put(("log", "Loaded the stored result - same pair, "
+                                          "same settings."))
+                self.ui_queue.put(("points", points))
+                self.ui_queue.put(("plan", plan))
+                self.ui_queue.put(("progress", (100, "Measuring done")))
+                return
             pair_key = (track_key(ref_path), track_key(tgt_path))
             if self.decoded.get("key") == pair_key:
                 ref, tgt, meta = (self.decoded["ref"], self.decoded["tgt"],
@@ -3142,17 +3265,6 @@ class MainWindow(FluentWindow):
                 return
             self.meta = meta
 
-            mode = ("auto" if self.combo_signal.currentIndex() == 0
-                    else "waveform" if self.combo_signal.currentIndex() == 1
-                    else "envelope")
-            step = self._num(self.entry_step, 30)
-            hint = self._fps_hint()
-            # a tempo difference needs a framerate difference to exist at all;
-            # the checkbox covers the rare file that ignores that rule
-            fps_ref, fps_tgt = probe_framerate(ref_path), probe_framerate(tgt_path)
-            allow_drift = (self.chk_tempo.isChecked()
-                           or framerate_differs(fps_ref, fps_tgt))
-            self.allow_drift = allow_drift
             rate = 1.0 + hint / 1000.0 if hint and abs(hint) >= 0.3 else 1.0
             if rate != 1.0:
                 self.ui_queue.put(("progress", (
@@ -3220,6 +3332,8 @@ class MainWindow(FluentWindow):
             self.ui_queue.put(("plan", plan))
             for line in plan_report_lines(plan):
                 self.ui_queue.put(("log", line))
+            if not self.stop_event.is_set():
+                save_result(result_key_value, points, plan)
             self.ui_queue.put(("progress", (100, "Measuring done")))
         except Exception as exc:
             self.ui_queue.put(("log", f"✗ {exc}"))

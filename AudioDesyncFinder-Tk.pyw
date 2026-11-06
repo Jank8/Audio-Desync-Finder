@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.3"
+APP_VERSION = "2.1.4"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2492,23 +2492,120 @@ def clear_decoded_cache():
     """
     freed = 0
     removed = 0
-    try:
-        names = os.listdir(_cache_dir())
-    except OSError:
-        return 0, 0
-    for name in names:
-        if not name.endswith((".pcm", ".tmp")):
-            continue
-        path = os.path.join(_cache_dir(), name)
+    for folder, suffixes in ((_cache_dir(), (".pcm", ".tmp")),
+                             (_result_dir(), (".json",))):
         try:
-            size = os.path.getsize(path)
-            os.remove(path)
+            names = os.listdir(folder)
         except OSError:
             continue
-        freed += size
-        removed += 1
+        for name in names:
+            if not name.endswith(suffixes):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+            except OSError:
+                continue
+            freed += size
+            removed += 1
     return freed, removed
 
+
+RESULT_KEEP = 20          # remembered scans on disk
+RESULT_LIMIT_BYTES = 200 * 1024 ** 2
+
+
+def _result_dir() -> str:
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return os.path.join(base, "AudioDesyncFinder", "results")
+
+
+def result_key(ref_path, tgt_path, window, step, min_conf, mode, allow_drift,
+               hint):
+    """
+    Identity of one exact scan: both files and every setting that shapes it.
+
+    Decoding already remembers each file; this remembers the *answer*, so asking
+    the same question twice (same pair, same settings) does not measure the film
+    again.  Cores are left out on purpose - they change the speed, not the result.
+    """
+    return [repr(track_key(ref_path)), repr(track_key(tgt_path)),
+            round(float(window), 3), round(float(step), 3),
+            round(float(min_conf), 3), str(mode), bool(allow_drift),
+            None if hint is None else round(float(hint), 4)]
+
+
+def _result_file(key) -> str:
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_result_dir(), f"scan-{digest}.json")
+
+
+def load_result(key):
+    """The points and plan of an identical earlier scan, or None."""
+    if not key:
+        return None
+    path = _result_file(key)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if payload.get("key") != key:
+        return None
+    points = payload.get("points")
+    plan = payload.get("plan")
+    if not isinstance(points, list) or not isinstance(plan, dict):
+        return None
+    if not plan.get("segments"):
+        return None
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+    return points, plan
+
+
+def save_result(key, points, plan) -> None:
+    """Remember this scan so the same question can be answered instantly."""
+    if not key or not plan or not plan.get("segments"):
+        return
+    try:
+        os.makedirs(_result_dir(), exist_ok=True)
+        path = _result_file(key)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"key": key, "points": points, "plan": plan},
+                      handle, default=float)
+    except (OSError, ValueError, TypeError):
+        return
+    _prune_results()
+
+
+def _prune_results() -> None:
+    try:
+        entries = []
+        for name in os.listdir(_result_dir()):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(_result_dir(), name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            entries.append((stat.st_mtime, stat.st_size, path))
+    except OSError:
+        return
+    entries.sort()
+    total = sum(entry[1] for entry in entries)
+    while entries and (len(entries) > RESULT_KEEP or total > RESULT_LIMIT_BYTES):
+        _mtime, size, path = entries.pop(0)
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
 
 def _prune_cache() -> None:
     """Keep one pair: at most CACHE_KEEP_FILES files, under the byte limit."""
@@ -4677,6 +4774,28 @@ class TimelinePanel:
         console_log("── Timeline scan started ─────────────────────", "bold")
         self._post("status", "Decoding audio…")
         self._scan_t0 = time.time()
+        # the settings first: an identical earlier scan can be replayed
+        mode = self._mode()
+        step = self._step()
+        window_size = self._window()
+        hint = self._fps_slope()
+        fps_ref = probe_framerate(self.ref_path)
+        fps_tgt = probe_framerate(self.target_path)
+        allow_drift = (self.var_tempo.get()
+                       or framerate_differs(fps_ref, fps_tgt))
+        self.allow_drift = allow_drift
+        result_key_value = result_key(self.ref_path, self.target_path, window_size,
+                                      step, self._conf(), mode, allow_drift, hint)
+        stored = load_result(result_key_value)
+        if stored is not None and not self.stop_event.is_set():
+            points, plan = stored
+            console_log("Loaded the stored result - same pair, same settings.",
+                        "info")
+            self._post("points", points)
+            self._post("plan", plan)
+            self._post("progress", (100.0, "Measuring done"))
+            self._post("idle", None)
+            return
         pair_key = (track_key(self.ref_path), track_key(self.target_path))
         if pair_key == self._decoded_key and self.ref_data is not None:
             ref, tgt, meta = self.ref_data, self.tgt_data, self.meta
@@ -4697,14 +4816,7 @@ class TimelinePanel:
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
 
-        window, step, mode = self._window(), self._step(), self._mode()
-        hint = self._fps_slope()
-        # a tempo difference needs a framerate difference to exist at all;
-        # the checkbox covers the rare file that ignores that rule
-        fps_ref = probe_framerate(self.ref_path)
-        fps_tgt = probe_framerate(self.target_path)
-        self.allow_drift = (self.var_tempo.get()
-                            or framerate_differs(fps_ref, fps_tgt))
+        window = window_size
 
         # A known framerate ratio lets the scan start already compensated.
         # Without it a PAL-style 43 ms/s difference smears the peak so badly
@@ -4799,6 +4911,8 @@ class TimelinePanel:
         for line in plan_report_lines(plan):
             console_log(line, "ok")
         self._post("plan", plan)
+        if not self.stop_event.is_set():
+            save_result(result_key_value, points, plan)
         self._post("status", "Measuring done")
         self._post("idle", None)
 

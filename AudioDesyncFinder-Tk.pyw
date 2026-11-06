@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.0.97"
+APP_VERSION = "2.0.98"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4022,6 +4022,67 @@ def plan_to_filter(plan: dict, target_duration: float):
     return parts, "[aout]", used, notes
 
 
+PREVIEW_SECONDS = 20.0
+
+
+def preview_clip(ref_path: str, tgt_path: str, plan: dict, start_s: float,
+                 span_s: float = PREVIEW_SECONDS, out_path: str = None):
+    """
+    Write a short mp4: video from the reference, audio from the target, corrected.
+
+    The result is played by the system player, which is the only way to judge a
+    mux by eye and ear without building a player into the app.  The correction
+    comes from the same plan the export would use, so what you see is what you
+    would get.
+    """
+    segments = (plan or {}).get("segments") or []
+    if not segments:
+        return None
+    segment = None
+    for candidate in segments:
+        if float(candidate["t_start"]) - 1.0 <= start_s <= float(candidate["t_end"]) + 1.0:
+            segment = candidate
+            break
+    if segment is None:
+        segment = segments[0]
+    offset = float(segment["offset"]) + float(segment["slope"]) * (
+        start_s - float(segment["t_start"]))
+    rate = float(segment.get("atempo") or 1.0)
+    rate = min(2.0, max(0.5, rate))
+    audio_start = max(0.0, start_s + offset / 1000.0)
+    if out_path is None:
+        out_path = os.path.join(tempfile.gettempdir(), "ads_preview.mp4")
+    # a reference without a picture still makes a useful audio preview; asking
+    # ffmpeg to map a video stream that is not there fails the whole render
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=index", "-of", "csv=p=0", ref_path],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
+        has_video = bool(probe.stdout.strip())
+    except (subprocess.SubprocessError, OSError):
+        has_video = True
+    command = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", f"{start_s:.3f}", "-t", f"{span_s:.3f}", "-i", ref_path,
+        "-ss", f"{audio_start:.3f}", "-t", f"{span_s:.3f}", "-i", tgt_path,
+    ]
+    if has_video:
+        command += ["-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+    else:
+        command += ["-map", "1:a:0", "-vn"]
+    command += [
+        "-af", f"atempo={rate:.8f},aresample=48000",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", out_path,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True,
+                            startupinfo=get_startupinfo(), timeout=180)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip()[:400] or "ffmpeg failed")
+    return out_path
+
 def export_plan(plan: dict, target_path: str, out_path: str,
                 progress=None, log=None, should_stop=None) -> None:
     """
@@ -4392,6 +4453,13 @@ class TimelinePanel:
             except Exception:
                 pass
 
+        self.btn_preview = tk.Button(footer, text="▶ Preview",
+                                     command=self.preview, bg="#333333",
+                                     fg="#ffffff", relief=tk.FLAT,
+                                     font=("Segoe UI", 9), cursor="hand2",
+                                     activebackground="#3a3a3a",
+                                     activeforeground="#ffffff", padx=12, pady=8)
+        self.btn_preview.pack(side=tk.LEFT, padx=(0, 6))
         self.btn_export = tk.Button(footer, text="⬇ Export corrected audio…",
                                     command=self.export_audio, bg="#1a3a5a",
                                     fg="#ffffff", relief=tk.FLAT, state=tk.DISABLED,
@@ -4915,6 +4983,26 @@ class TimelinePanel:
                                min_conf=self._conf(),
                                allow_drift=getattr(self, "allow_drift", True))
         self._refresh_plan()
+
+    def preview(self) -> None:
+        """Render a short window and hand it to the system player."""
+        if not self.plan or not self.meta:
+            messagebox.showwarning("Preview", "Run a scan first – no plan yet.",
+                                   parent=self.frame)
+            return
+        x0, x1 = self.ax.get_xlim()
+        centre = max(0.0, 0.5 * (float(x0) + float(x1)))
+        plan = self._export_plan_variant()
+
+        def work():
+            path = preview_clip(self.ref_path, self.target_path, plan, centre)
+            self._post("status", f"Preview at {format_timecode(centre)} – opening…")
+            try:
+                os.startfile(path)
+            except Exception:
+                subprocess.run(["explorer", path])
+
+        self._start(work, "Rendering preview…")
 
     def export_audio(self) -> None:
         if not self.plan or not self.plan.get("segments"):

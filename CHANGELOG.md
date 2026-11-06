@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.98 / 2.0.98
+
+- **Preview: reference picture, target sound.** A "▶ Preview" button renders a
+  30 s window around the middle of what the chart shows - video from the
+  reference, audio from the target with the plan applied - and plays it.
+  Qt uses a player built into the app (QtMultimedia): play/pause, a scrub bar and
+  "30 s" jumps, with the next window rendered in the background while the current
+  one plays. Tk renders the same clip and opens it in the system player.
+- The preview uses the same plan the export would use, including the Offset and
+  FPS tempo checkboxes, so what you watch is what you get.
+- A reference without a video stream still previews as audio instead of failing.
+
 ## 3.0.97 / 2.0.97
 
 - **Two export checkboxes: "Offset" and "FPS tempo".** Ticking one asks for a

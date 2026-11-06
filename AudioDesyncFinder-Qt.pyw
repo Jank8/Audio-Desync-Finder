@@ -97,9 +97,18 @@ import threading
 
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QColor, QDoubleValidator, QIcon, QIntValidator
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog,
-                               QHBoxLayout, QLabel, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog,
+                               QFileDialog, QHBoxLayout, QLabel, QPushButton,
+                               QSlider, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtCore import QUrl
+
+try:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PySide6.QtMultimediaWidgets import QVideoWidget
+    _HAVE_PLAYER = True
+except Exception:                      # a stripped PySide6 without Multimedia
+    QAudioOutput = QMediaPlayer = QVideoWidget = None
+    _HAVE_PLAYER = False
 
 from qfluentwidgets import (BodyLabel, CardWidget, CheckBox, ComboBox,
                             FluentWindow, InfoBar, InfoBarPosition, LineEdit,
@@ -2200,6 +2209,67 @@ def plan_to_filter(plan: dict, target_duration: float):
     return parts, "[aout]", used, notes
 
 
+PREVIEW_SECONDS = 20.0
+
+
+def preview_clip(ref_path: str, tgt_path: str, plan: dict, start_s: float,
+                 span_s: float = PREVIEW_SECONDS, out_path: str = None):
+    """
+    Write a short mp4: video from the reference, audio from the target, corrected.
+
+    The result is played by the system player, which is the only way to judge a
+    mux by eye and ear without building a player into the app.  The correction
+    comes from the same plan the export would use, so what you see is what you
+    would get.
+    """
+    segments = (plan or {}).get("segments") or []
+    if not segments:
+        return None
+    segment = None
+    for candidate in segments:
+        if float(candidate["t_start"]) - 1.0 <= start_s <= float(candidate["t_end"]) + 1.0:
+            segment = candidate
+            break
+    if segment is None:
+        segment = segments[0]
+    offset = float(segment["offset"]) + float(segment["slope"]) * (
+        start_s - float(segment["t_start"]))
+    rate = float(segment.get("atempo") or 1.0)
+    rate = min(2.0, max(0.5, rate))
+    audio_start = max(0.0, start_s + offset / 1000.0)
+    if out_path is None:
+        out_path = os.path.join(tempfile.gettempdir(), "ads_preview.mp4")
+    # a reference without a picture still makes a useful audio preview; asking
+    # ffmpeg to map a video stream that is not there fails the whole render
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=index", "-of", "csv=p=0", ref_path],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=get_startupinfo())
+        has_video = bool(probe.stdout.strip())
+    except (subprocess.SubprocessError, OSError):
+        has_video = True
+    command = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", f"{start_s:.3f}", "-t", f"{span_s:.3f}", "-i", ref_path,
+        "-ss", f"{audio_start:.3f}", "-t", f"{span_s:.3f}", "-i", tgt_path,
+    ]
+    if has_video:
+        command += ["-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+    else:
+        command += ["-map", "1:a:0", "-vn"]
+    command += [
+        "-af", f"atempo={rate:.8f},aresample=48000",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", out_path,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True,
+                            startupinfo=get_startupinfo(), timeout=180)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip()[:400] or "ffmpeg failed")
+    return out_path
+
 def export_plan(plan: dict, target_path: str, out_path: str,
                 progress=None, log=None, should_stop=None) -> None:
     """
@@ -2275,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.97"
+APP_VERSION = "3.0.98"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2448,6 +2518,122 @@ class Card(CardWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setBorderRadius(8)
+
+
+class PreviewDialog(QDialog):
+    """
+    Reference picture, target sound, corrected on the fly.
+
+    A window of the film is rendered to a small H.264 file (video from the
+    reference, audio from the target with the plan applied) and played here;
+    jumping a window renders the next one.  Rendering in the background keeps
+    the dialogue responsive while ffmpeg works.
+    """
+
+    SPAN = 30.0
+
+    def __init__(self, parent, ref_path: str, tgt_path: str, plan_getter,
+                 start_s: float):
+        super().__init__(parent)
+        self.setWindowTitle("Preview - reference picture, target sound")
+        self.resize(980, 600)
+        self.ref_path = ref_path
+        self.tgt_path = tgt_path
+        self.plan_getter = plan_getter
+        self.start = max(0.0, float(start_s))
+        self._result = None
+        self._pending = self.start
+
+        layout = QVBoxLayout(self)
+        self.video = QVideoWidget(self)
+        self.video.setMinimumHeight(420)
+        layout.addWidget(self.video, 1)
+
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio)
+        self.player.setVideoOutput(self.video)
+
+        self.slider = QSlider(Qt.Horizontal, self)
+        self.slider.setRange(0, 1000)
+        layout.addWidget(self.slider)
+
+        row = QHBoxLayout()
+        self.btn_back = QPushButton("⏪ 30 s")
+        self.btn_play = QPushButton("⏸ Pause")
+        self.btn_fwd = QPushButton("30 s ⏩")
+        self.btn_close = QPushButton("Close")
+        for button in (self.btn_back, self.btn_play, self.btn_fwd):
+            row.addWidget(button)
+        row.addStretch(1)
+        row.addWidget(self.btn_close)
+        layout.addLayout(row)
+        self.status = QLabel("", self)
+        layout.addWidget(self.status)
+
+        self.btn_back.clicked.connect(lambda: self._render(self.start - self.SPAN))
+        self.btn_fwd.clicked.connect(lambda: self._render(self.start + self.SPAN))
+        self.btn_close.clicked.connect(self.close)
+        self.btn_play.clicked.connect(self._toggle)
+        self.slider.sliderMoved.connect(self._scrub)
+
+        self.player.positionChanged.connect(self._on_position)
+        self.player.playbackStateChanged.connect(self._on_state)
+        self._poll = QTimer(self)
+        self._poll.timeout.connect(self._check)
+        self._render(self.start)
+
+    def _toggle(self):
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def _on_state(self, state):
+        playing = state == QMediaPlayer.PlayingState
+        self.btn_play.setText("⏸ Pause" if playing else "▶ Play")
+
+    def _scrub(self, value):
+        duration = self.player.duration()
+        if duration > 0:
+            self.player.setPosition(int(duration * value / 1000))
+
+    def _on_position(self, position):
+        duration = self.player.duration()
+        if duration > 0 and not self.slider.isSliderDown():
+            self.slider.setValue(int(1000 * position / duration))
+
+    def _render(self, start):
+        self.start = max(0.0, float(start))
+        self._pending = self.start
+        self._result = None
+        self.status.setText(
+            f"Rendering {self.SPAN:.0f} s at {format_timecode(self.start)}…")
+        plan = self.plan_getter()
+        ref_path, tgt_path = self.ref_path, self.tgt_path
+
+        def work():
+            try:
+                self._result = (preview_clip(ref_path, tgt_path, plan,
+                                             self._pending, self.SPAN), None)
+            except Exception as exc:
+                self._result = (None, exc)
+
+        threading.Thread(target=work, daemon=True).start()
+        self._poll.start(100)
+
+    def _check(self):
+        if self._result is None:
+            return
+        path, error = self._result
+        self._result = None
+        self._poll.stop()
+        if error is not None:
+            self.status.setText(f"Preview failed: {error}")
+            return
+        self.player.setSource(QUrl.fromLocalFile(path))
+        self.player.play()
+        self.status.setText(f"{format_timecode(self.start)} + {self.SPAN:.0f} s")
 
 
 class MainWindow(FluentWindow):
@@ -2688,6 +2874,12 @@ class MainWindow(FluentWindow):
         self.chk_fix_tempo.setToolTip(
             "Apply only the tempo the framerates imply (no measured drift)")
         footer.addWidget(self.chk_fix_tempo)
+        self.btn_preview = PushButton("▶  Preview")
+        self.btn_preview.setToolTip(
+            "Play the reference picture with the target sound, corrected")
+        self.btn_preview.setEnabled(False)
+        self.btn_preview.clicked.connect(self.preview)
+        footer.addWidget(self.btn_preview)
         self.btn_export = PrimaryPushButton("⬇  Export corrected audio…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_audio)
@@ -2957,6 +3149,17 @@ class MainWindow(FluentWindow):
             self.ui_queue.put(("log", f"✗ {exc}"))
         finally:
             self.ui_queue.put(("idle", None))
+
+    def preview(self):
+        """Open the player at the middle of what the chart currently shows."""
+        if not self.plan or not _HAVE_PLAYER:
+            return
+        ref_path, tgt_path = self._ordered_paths()
+        x0, x1 = self.ax.get_xlim()
+        centre = max(0.0, 0.5 * (float(x0) + float(x1)))
+        dialog = PreviewDialog(self, ref_path, tgt_path,
+                               self._export_plan_variant, centre)
+        dialog.exec()
 
     def export_audio(self):
         if not self.plan or not self.plan.get("segments"):
@@ -3255,6 +3458,7 @@ class MainWindow(FluentWindow):
         self._draw()
         self._fill_table()
         self.btn_export.setEnabled(bool(plan.get("segments")))
+        self.btn_preview.setEnabled(bool(plan.get("segments")) and _HAVE_PLAYER)
 
     def _notify(self, title, content, ok=True):
         (InfoBar.success if ok else InfoBar.error)(

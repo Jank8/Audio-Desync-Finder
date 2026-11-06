@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.12 / 2.1.12
+
+- **Clicking the timeline now really seeks.** The first version passed
+  `event.position().x()` (a float) straight into `sliderValueFromPosition()`,
+  which expects integers: PySide raised inside the handler, Qt swallowed it, and
+  the click did nothing at all. The coordinates are cast now, and a click emits
+  its own `clickedAt` signal that seeks both players *and* starts playback, so it
+  no longer depends on the drag state. Verified: a click at 60 % jumps to 4:00 of
+  6:40 and plays.
+
 ## 3.1.11 / 2.1.11
 
 - **The preview takes a typed time.** `Go to [1:07:15] [Go]` under the slider

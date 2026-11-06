@@ -95,7 +95,7 @@ import queue
 import sys
 import threading
 
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QIcon, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog,
                                QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -2502,7 +2502,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.11"
+APP_VERSION = "3.1.12"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2680,15 +2680,22 @@ class Card(CardWidget):
 class JumpSlider(QSlider):
     """A slider that jumps to the clicked position instead of paging."""
 
+    clickedAt = Signal(int)
+
     def mousePressEvent(self, event):          # noqa: N802 - Qt naming
-        if event.button() == Qt.LeftButton:
-            style = self.style()
-            value = style.sliderValueFromPosition(
-                self.minimum(), self.maximum(), event.position().x(), self.width())
-            self.setValue(value)
-            self.sliderMoved.emit(value)
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
             return
-        super().mousePressEvent(event)
+        try:
+            x = int(event.position().x())
+            width = max(1, int(self.width()))
+            value = int(self.style().sliderValueFromPosition(
+                self.minimum(), self.maximum(), x, width))
+        except Exception:
+            super().mousePressEvent(event)
+            return
+        self.setValue(value)
+        self.clickedAt.emit(value)
 
 
 class PreviewDialog(QDialog):
@@ -2772,6 +2779,9 @@ class PreviewDialog(QDialog):
         self.btn_close.clicked.connect(self.close)
         self.btn_play.clicked.connect(self._toggle)
         self.slider.sliderMoved.connect(self._scrub)
+        # a click is not a drag: it seeks and plays from there
+        self.slider.clickedAt.connect(
+            lambda value: self._seek_to(self._total_duration() * value / 1000.0))
         self.slider.sliderPressed.connect(self._scrub_start)
         self.slider.sliderReleased.connect(self._scrub_end)
         self.ref_player.positionChanged.connect(self._on_position)

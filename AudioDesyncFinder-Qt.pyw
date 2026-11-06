@@ -2345,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.99"
+APP_VERSION = "3.1.0"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2522,12 +2522,14 @@ class Card(CardWidget):
 
 class PreviewDialog(QDialog):
     """
-    Reference picture, target sound, corrected on the fly.
+    Reference picture with the target sound, played live from both files.
 
-    A window of the film is rendered to a small H.264 file (video from the
-    reference, audio from the target with the plan applied) and played here;
-    jumping a window renders the next one.  Rendering in the background keeps
-    the dialogue responsive while ffmpeg works.
+    Two players run at once: the reference with the picture (muted) and the
+    target as sound only, seeked to where the plan says its audio is.  A timer
+    nudges the sound back into place every few hundred milliseconds, and the
+    plan's atempo becomes the sound player's playback rate, so nothing has to be
+    rendered first.  Rendering stays as a fallback for the files Qt cannot
+    decode, and gives the exact bytes the export would write.
     """
 
     SPAN = 30.0
@@ -2536,23 +2538,34 @@ class PreviewDialog(QDialog):
                  start_s: float):
         super().__init__(parent)
         self.setWindowTitle("Preview - reference picture, target sound")
-        self.resize(980, 600)
+        self.resize(980, 620)
         self.ref_path = ref_path
         self.tgt_path = tgt_path
         self.plan_getter = plan_getter
         self.start = max(0.0, float(start_s))
         self._result = None
         self._pending = self.start
+        self._live = _HAVE_PLAYER
+        self._offset0 = 0.0
+        self._slope = 0.0
+        self._t0 = 0.0
+        self._atempo = 1.0
 
         layout = QVBoxLayout(self)
         self.video = QVideoWidget(self)
         self.video.setMinimumHeight(420)
         layout.addWidget(self.video, 1)
 
-        self.player = QMediaPlayer(self)
-        self.audio = QAudioOutput(self)
-        self.player.setAudioOutput(self.audio)
-        self.player.setVideoOutput(self.video)
+        self.ref_player = QMediaPlayer(self)
+        self.ref_audio = QAudioOutput(self)
+        self.ref_audio.setVolume(0.0)          # the reference only gives picture
+        self.ref_player.setAudioOutput(self.ref_audio)
+        self.ref_player.setVideoOutput(self.video)
+
+        self.tgt_player = QMediaPlayer(self)
+        self.tgt_audio = QAudioOutput(self)
+        self.tgt_audio.setVolume(1.0)
+        self.tgt_player.setAudioOutput(self.tgt_audio)
 
         self.slider = QSlider(Qt.Horizontal, self)
         self.slider.setRange(0, 1000)
@@ -2571,38 +2584,112 @@ class PreviewDialog(QDialog):
         self.status = QLabel("", self)
         layout.addWidget(self.status)
 
-        self.btn_back.clicked.connect(lambda: self._render(self.start - self.SPAN))
-        self.btn_fwd.clicked.connect(lambda: self._render(self.start + self.SPAN))
+        self.btn_back.clicked.connect(lambda: self._seek_to(self.start - self.SPAN))
+        self.btn_fwd.clicked.connect(lambda: self._seek_to(self.start + self.SPAN))
         self.btn_close.clicked.connect(self.close)
         self.btn_play.clicked.connect(self._toggle)
         self.slider.sliderMoved.connect(self._scrub)
+        self.ref_player.positionChanged.connect(self._on_position)
 
-        self.player.positionChanged.connect(self._on_position)
-        self.player.playbackStateChanged.connect(self._on_state)
+        self._sync = QTimer(self)
+        self._sync.timeout.connect(self._keep_sync)
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._check)
-        self._render(self.start)
 
-    def _toggle(self):
-        if self.player.playbackState() == QMediaPlayer.PlayingState:
-            self.player.pause()
+        if self._live:
+            self.ref_player.setSource(QUrl.fromLocalFile(ref_path))
+            self.tgt_player.setSource(QUrl.fromLocalFile(tgt_path))
+            self.ref_player.errorOccurred.connect(self._on_error)
+            self.tgt_player.errorOccurred.connect(self._on_error)
+            self._seek_to(self.start)
         else:
-            self.player.play()
+            self._render(self.start)
 
-    def _on_state(self, state):
-        playing = state == QMediaPlayer.PlayingState
-        self.btn_play.setText("⏸ Pause" if playing else "▶ Play")
+    # ---- the plan decides where the sound has to start and how fast --------
+    def _segment_at(self, t):
+        plan = self.plan_getter() or {}
+        segments = plan.get("segments") or []
+        if not segments:
+            return None
+        for segment in segments:
+            if segment["t_start"] - 1.0 <= t <= segment["t_end"] + 1.0:
+                return segment
+        return segments[0]
 
-    def _scrub(self, value):
-        duration = self.player.duration()
-        if duration > 0:
-            self.player.setPosition(int(duration * value / 1000))
+    def _apply_plan_at(self, t):
+        segment = self._segment_at(t)
+        if segment is None:
+            self._offset0, self._slope, self._t0, self._atempo = 0.0, 0.0, t, 1.0
+            return
+        self._offset0 = float(segment["offset"]) + float(segment["slope"]) * (
+            t - float(segment["t_start"]))
+        self._slope = float(segment["slope"])
+        self._t0 = t
+        self._atempo = min(2.0, max(0.5, float(segment.get("atempo") or 1.0)))
+
+    def _offset_at(self, t):
+        return self._offset0 + self._slope * (t - self._t0)
+
+    # ---- live playback -----------------------------------------------------
+    def _seek_to(self, t):
+        self.start = max(0.0, float(t))
+        if self._live:
+            self._apply_plan_at(self.start)
+            self.ref_player.setPosition(int(self.start * 1000))
+            audio_at = max(0.0, self.start + self._offset_at(self.start) / 1000.0)
+            self.tgt_player.setPosition(int(audio_at * 1000))
+            try:
+                self.tgt_player.setPlaybackRate(self._atempo)
+            except Exception:
+                pass
+            self.ref_player.play()
+            self.tgt_player.play()
+            self._sync.start(400)
+            self.status.setText(
+                f"{format_timecode(self.start)} - live, "
+                f"offset {self._offset_at(self.start):+.0f} ms, "
+                f"atempo {self._atempo:.6f}")
+        else:
+            self._render(self.start)
+
+    def _keep_sync(self):
+        if not self._live or self.ref_player.playbackState() != QMediaPlayer.PlayingState:
+            return
+        t = self.ref_player.position() / 1000.0
+        expected = (t + self._offset_at(t) / 1000.0) * 1000.0
+        if abs(self.tgt_player.position() - expected) > 150.0:
+            self.tgt_player.setPosition(int(max(0.0, expected)))
 
     def _on_position(self, position):
-        duration = self.player.duration()
-        if duration > 0 and not self.slider.isSliderDown():
-            self.slider.setValue(int(1000 * position / duration))
+        if self.slider.isSliderDown():
+            return
+        span = self.SPAN
+        value = (position / 1000.0 - self.start) / span
+        self.slider.setValue(int(max(0.0, min(1.0, value)) * 1000))
 
+    def _scrub(self, value):
+        self._seek_to(self.start + self.SPAN * value / 1000.0)
+
+    def _toggle(self):
+        playing = self.ref_player.playbackState() == QMediaPlayer.PlayingState
+        if playing:
+            self.ref_player.pause()
+            self.tgt_player.pause()
+            self._sync.stop()
+            self.btn_play.setText("▶ Play")
+        else:
+            self.ref_player.play()
+            self.tgt_player.play()
+            self._sync.start(400)
+            self.btn_play.setText("⏸ Pause")
+
+    def _on_error(self, *_args):
+        if self._live:
+            self._live = False
+            self._sync.stop()
+            self._render(self.start)
+
+    # ---- fallback: render the window and play the file ---------------------
     def _render(self, start):
         self.start = max(0.0, float(start))
         self._pending = self.start
@@ -2631,8 +2718,8 @@ class PreviewDialog(QDialog):
         if error is not None:
             self.status.setText(f"Preview failed: {error}")
             return
-        self.player.setSource(QUrl.fromLocalFile(path))
-        self.player.play()
+        self.ref_player.setSource(QUrl.fromLocalFile(path))
+        self.ref_player.play()
         self.status.setText(f"{format_timecode(self.start)} + {self.SPAN:.0f} s")
 
 

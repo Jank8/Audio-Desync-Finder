@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.0 / 2.1.0
+
+- **The preview plays both files at once instead of rendering.** The reference
+  gives the picture (muted), a second player gives the target sound, seeked to
+  where the plan says its audio is; the plan's atempo becomes that player's
+  playback rate and a timer nudges it back into place every 400 ms. Seeking is
+  instant, nothing is written to disk first.
+- Rendering the window stays as a fallback for files Qt cannot decode, and it is
+  still what Tk uses (there is no video widget there).
+- Measured on the test pair: both players running, sound 5 ms from where the plan
+  puts it, status line showing `offset +421 ms, atempo 1.000000`.
+
 ## 3.0.99 / 2.0.99
 
 - **The Preview button lights up.** 3.0.98 enabled it in only one of the two

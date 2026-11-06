@@ -75,7 +75,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4883,7 +4883,11 @@ class TimelinePanel:
             console_log(f"Verification skipped: {exc}", "warn")
             residual = None
 
-        if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
+        # see the Qt build: below 10 ms it is inaudible and a simple export must
+        # stay the correction the user asked for
+        simple = plan is not self.plan
+        if (residual and not simple and not self.stop_event.is_set()
+                and abs(residual[0]) >= 10.0):
             delta = residual[0]          # positive = produced audio is late
             console_log(f"Residual {delta:+.1f} ms – re-exporting aligned…", "warn")
             self._post("status", f"Aligning: shifting by {delta:+.1f} ms and re-exporting…")

@@ -2345,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.2"
+APP_VERSION = "3.1.3"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3302,7 +3302,12 @@ class MainWindow(FluentWindow):
                 residual = measure_residual(ref_path, path, ref_array=ref_array)
             except Exception as exc:
                 self.ui_queue.put(("log", f"Verification skipped: {exc}"))
-            if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
+            # 3 ms is below what anyone hears, and a simple offset/tempo export
+            # is meant to be exactly that - shifting it again contradicts the
+            # checkboxes and re-encodes the whole film for nothing
+            simple = used_plan is not self.plan
+            if (residual and not simple and not self.stop_event.is_set()
+                    and abs(residual[0]) >= 10.0):
                 delta = residual[0]
                 self.ui_queue.put(("log", f"Residual {delta:+.1f} ms - re-exporting aligned…"))
                 adjusted = shift_plan(used_plan, delta)

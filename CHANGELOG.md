@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.3 / 2.1.3
+
+- **The export no longer re-encodes the film for a few milliseconds.** The
+  verification pass re-exported the whole file whenever the measured residual
+  reached 3 ms, which is inaudible and doubled the export time. The bar is 10 ms
+  now.
+- A simple export (Offset / FPS tempo ticked) is never re-shifted: correcting the
+  correction contradicts the checkbox you just set.
+
 ## 3.1.2 / 2.1.2
 
 - **Closing the preview stops the sound.** The two players are children of the

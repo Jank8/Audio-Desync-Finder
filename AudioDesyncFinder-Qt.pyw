@@ -98,7 +98,8 @@ import threading
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QColor, QDoubleValidator, QIcon, QIntValidator
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog,
-                               QFileDialog, QHBoxLayout, QLabel, QPushButton,
+                               QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton,
                                QSlider, QTableWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtCore import QUrl
 
@@ -1293,6 +1294,30 @@ def format_timecode(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def parse_timecode(text: str):
+    """Seconds from "2:34", "1:07:15", "95" or "95.5"; None when unreadable."""
+    if text is None:
+        return None
+    cleaned = str(text).strip().replace(",", ".")
+    if not cleaned:
+        return None
+    values = []
+    for part in cleaned.split(":"):
+        part = part.strip()
+        if part == "":
+            return None
+        try:
+            values.append(float(part))
+        except ValueError:
+            return None
+    if not values or len(values) > 3:
+        return None
+    seconds = 0.0
+    for value in values:
+        seconds = seconds * 60.0 + value
+    return seconds
+
+
 def time_tick_step(duration: float) -> float:
     """Tick spacing that puts a dozen labels on the time axis."""
     for step in (15, 30, 60, 120, 300, 600, 900, 1800, 3600):
@@ -2477,7 +2502,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.10"
+APP_VERSION = "3.1.11"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2652,6 +2677,20 @@ class Card(CardWidget):
         self.setBorderRadius(8)
 
 
+class JumpSlider(QSlider):
+    """A slider that jumps to the clicked position instead of paging."""
+
+    def mousePressEvent(self, event):          # noqa: N802 - Qt naming
+        if event.button() == Qt.LeftButton:
+            style = self.style()
+            value = style.sliderValueFromPosition(
+                self.minimum(), self.maximum(), event.position().x(), self.width())
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+            return
+        super().mousePressEvent(event)
+
+
 class PreviewDialog(QDialog):
     """
     Reference picture with the target sound, played live from both files.
@@ -2697,9 +2736,23 @@ class PreviewDialog(QDialog):
         self.tgt_audio.setVolume(1.0)
         self.tgt_player.setAudioOutput(self.tgt_audio)
 
-        self.slider = QSlider(Qt.Horizontal, self)
+        self.slider = JumpSlider(Qt.Horizontal, self)
         self.slider.setRange(0, 1000)
         layout.addWidget(self.slider)
+
+        # a time you can type: 2:34 or 1:07:15 or 95
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("Go to"))
+        self.time_edit = QLineEdit()
+        self.time_edit.setPlaceholderText("1:07:15")
+        self.time_edit.setFixedWidth(100)
+        self.time_edit.returnPressed.connect(self._jump_to_text)
+        time_row.addWidget(self.time_edit)
+        self.btn_go = QPushButton("Go")
+        self.btn_go.clicked.connect(self._jump_to_text)
+        time_row.addWidget(self.btn_go)
+        time_row.addStretch(1)
+        layout.addLayout(time_row)
 
         row = QHBoxLayout()
         self.btn_back = QPushButton("⏪ 10 min")
@@ -2795,11 +2848,15 @@ class PreviewDialog(QDialog):
             self.tgt_player.setPosition(int(max(0.0, expected)))
 
     def _on_position(self, position):
-        if self.slider.isSliderDown():
+        if self.slider.isSliderDown() or getattr(self, "_scrubbing", False):
             return
+        now = position / 1000.0
         duration = self._total_duration()
-        value = (position / 1000.0) / duration
-        self.slider.setValue(int(max(0.0, min(1.0, value)) * 1000))
+        self.slider.setValue(int(max(0.0, min(1.0, now / duration)) * 1000))
+        self.status.setText(
+            f"{format_timecode(now)} / {format_timecode(duration)}  ·  "
+            f"offset {self._offset_at(now):+.0f} ms  ·  "
+            f"atempo {self._atempo:.6f}")
 
     def _total_duration(self):
         position_based = self.ref_player.duration() / 1000.0
@@ -2807,6 +2864,14 @@ class PreviewDialog(QDialog):
             return position_based
         plan = self.plan_getter() or {}
         return max(1.0, float(plan.get("duration") or 1.0))
+
+    def _jump_to_text(self):
+        target = parse_timecode(self.time_edit.text())
+        if target is None:
+            self.status.setText("Type a time like 2:34 or 1:07:15.")
+            return
+        duration = self._total_duration()
+        self._seek_to(min(max(0.0, target), duration))
 
     def _scrub_start(self):
         """Take the players off the clock while the handle is being dragged."""

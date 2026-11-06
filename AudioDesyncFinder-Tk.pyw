@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.10"
+APP_VERSION = "2.1.11"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3109,6 +3109,30 @@ def format_timecode(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+def parse_timecode(text: str):
+    """Seconds from "2:34", "1:07:15", "95" or "95.5"; None when unreadable."""
+    if text is None:
+        return None
+    cleaned = str(text).strip().replace(",", ".")
+    if not cleaned:
+        return None
+    values = []
+    for part in cleaned.split(":"):
+        part = part.strip()
+        if part == "":
+            return None
+        try:
+            values.append(float(part))
+        except ValueError:
+            return None
+    if not values or len(values) > 3:
+        return None
+    seconds = 0.0
+    for value in values:
+        seconds = seconds * 60.0 + value
+    return seconds
 
 
 def time_tick_step(duration: float) -> float:

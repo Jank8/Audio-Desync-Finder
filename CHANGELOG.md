@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.11 / 2.1.11
+
+- **The preview takes a typed time.** `Go to [1:07:15] [Go]` under the slider
+  accepts `2:34`, `1:07:15`, `95` or `95.5` and jumps there; the parser
+  (`parse_timecode()`) sits next to `format_timecode()` in both builds.
+- **Clicking the slider jumps** instead of paging: a small `JumpSlider` subclass
+  computes the value from the click position.
+- **The status follows playback.** It used to be written once on seek; it now
+  updates from `positionChanged`, so the timecode, the offset and the atempo
+  move with the film.
+
 ## 3.1.10 / 2.1.10
 
 - **Cuts are measured densely.** The refinement around a jump used to sample

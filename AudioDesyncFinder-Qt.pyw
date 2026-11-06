@@ -2345,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.98"
+APP_VERSION = "3.0.99"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3173,6 +3173,7 @@ class MainWindow(FluentWindow):
         path = mka_path(path)
         self.stop_event.clear()          # a previous Stop must not cancel this
         self.btn_export.setEnabled(False)
+        self.btn_preview.setEnabled(False)
         self.btn_stop.setEnabled(True)
         threading.Thread(target=self._export_task, args=(path,), daemon=True).start()
 
@@ -3282,6 +3283,8 @@ class MainWindow(FluentWindow):
                 self._update_summary()
                 self._draw()
                 self.btn_export.setEnabled(bool(payload.get("segments")))
+                self.btn_preview.setEnabled(
+                    bool(payload.get("segments")) and _HAVE_PLAYER)
             elif kind == "idle":
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)

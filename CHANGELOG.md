@@ -3,6 +3,12 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.99 / 2.0.99
+
+- **The Preview button lights up.** 3.0.98 enabled it in only one of the two
+  places the export button is enabled, so after a scan it stayed grey. It now
+  follows the export button everywhere: scan result, deleted point, export run.
+
 ## 3.0.98 / 2.0.98
 
 - **Preview: reference picture, target sound.** A "▶ Preview" button renders a

@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.0.97 / 2.0.97
+
+- **Two export checkboxes: "Offset" and "FPS tempo".** Ticking one asks for a
+  simple correction instead of the fitted model: one delay for the whole film
+  and/or one atempo taken from the framerates, with no segments and no edit
+  points. Both ticked gives exactly "offset plus fps tempo". Unticked (the
+  default) the export uses the fitted model as before.
+- The log names what was applied: `Simple export: offset +350.0 ms,
+  atempo 0.99899900`. Both builds.
+
 ## 3.0.96 / 2.0.96
 
 - **A wide RMS no longer means "wrong release".** The large notice fired when a

@@ -2275,7 +2275,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.0.96"
+APP_VERSION = "3.0.97"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2680,6 +2680,14 @@ class MainWindow(FluentWindow):
         footer.addWidget(self.progress, 1)
         self.status = BodyLabel("Ready")
         footer.addWidget(self.status)
+        self.chk_fix_offset = CheckBox("Offset")
+        self.chk_fix_offset.setToolTip(
+            "Apply the offset correction (a single delay, no fitted segments)")
+        footer.addWidget(self.chk_fix_offset)
+        self.chk_fix_tempo = CheckBox("FPS tempo")
+        self.chk_fix_tempo.setToolTip(
+            "Apply only the tempo the framerates imply (no measured drift)")
+        footer.addWidget(self.chk_fix_tempo)
         self.btn_export = PrimaryPushButton("⬇  Export corrected audio…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_audio)
@@ -2965,11 +2973,39 @@ class MainWindow(FluentWindow):
         self.btn_stop.setEnabled(True)
         threading.Thread(target=self._export_task, args=(path,), daemon=True).start()
 
+    def _export_plan_variant(self):
+        """
+        The plan the export will use.
+
+        With neither box ticked that is the fitted model.  Ticking one asks for a
+        simple correction instead: one delay for the whole film and/or one
+        atempo taken from the framerates, ignoring the fitted segments.
+        """
+        plan = self.plan or {}
+        want_offset = self.chk_fix_offset.isChecked()
+        want_tempo = self.chk_fix_tempo.isChecked()
+        if not (want_offset or want_tempo):
+            return plan
+        hint = self._fps_hint()
+        offset = float(plan.get("initial_offset") or 0.0) if want_offset else 0.0
+        slope = float(hint) if (want_tempo and hint) else 0.0
+        duration = float(plan.get("duration") or 0.0)
+        self.ui_queue.put(("log", (
+            f"Simple export: offset {offset:+.1f} ms, "
+            f"atempo {1.0 + slope / 1000.0:.8f}")))
+        return {"segments": [{"t_start": 0.0, "t_end": duration,
+                              "offset": offset, "slope": slope,
+                              "atempo": 1.0 + slope / 1000.0,
+                              "n": 0, "rms": 0.0, "locked": True}],
+                "jumps": [], "initial_offset": offset, "duration": duration,
+                "warnings": []}
+
     def _export_task(self, path):
         try:
             ref_path, tgt_path = self._ordered_paths()
+            used_plan = self._export_plan_variant()
             export_plan(
-                self.plan, tgt_path, path,
+                used_plan, tgt_path, path,
                 progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
                 log=lambda m, tag="info": self.ui_queue.put(("log", m)),
                 should_stop=self.stop_event.is_set)
@@ -2989,13 +3025,14 @@ class MainWindow(FluentWindow):
             if residual and abs(residual[0]) >= 3.0 and not self.stop_event.is_set():
                 delta = residual[0]
                 self.ui_queue.put(("log", f"Residual {delta:+.1f} ms - re-exporting aligned…"))
-                adjusted = shift_plan(self.plan, delta)
+                adjusted = shift_plan(used_plan, delta)
                 export_plan(
                     adjusted, tgt_path, path,
                     progress=lambda p, t: self.ui_queue.put(("progress", (p, t))),
                     log=lambda m, tag="info": self.ui_queue.put(("log", m)),
                     should_stop=self.stop_event.is_set)
-                self.plan = adjusted
+                if used_plan is self.plan:
+                    self.plan = adjusted
                 self.ui_queue.put(("plan", adjusted))
                 try:
                     residual = measure_residual(ref_path, path, ref_array=ref_array)

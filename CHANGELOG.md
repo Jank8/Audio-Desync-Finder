@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.14 / 2.1.14
+
+- **`Play from here`.** Select a measurement in the table and the new button
+  opens the preview at that exact second, so checking a suspicious point no
+  longer means typing the time by hand. The preview button and this one share
+  `_open_preview_at()`.
+
 ## 3.1.13 / 2.1.13
 
 - **`Go to` no longer stalls the picture.** It seeked while both players were

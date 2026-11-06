@@ -2502,7 +2502,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.13"
+APP_VERSION = "3.1.14"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3148,6 +3148,11 @@ class MainWindow(FluentWindow):
         self.btn_del = PushButton("Delete selected point")
         self.btn_del.clicked.connect(self.delete_point)
         bar.addWidget(self.btn_del)
+        self.btn_play_here = PushButton("▶ Play from here")
+        self.btn_play_here.setToolTip(
+            "Open the preview at the selected measurement")
+        self.btn_play_here.clicked.connect(self.play_here)
+        bar.addWidget(self.btn_play_here)
         cl.addLayout(bar)
         outer.addWidget(chart, 3)
 
@@ -3527,12 +3532,28 @@ class MainWindow(FluentWindow):
         if not (self.ref_path and self.tgt_path):
             show_message("Preview", "Pick both files first.")
             return
-        ref_path, tgt_path = self._ordered_paths()
         x0, x1 = self.ax.get_xlim()
-        centre = max(0.0, 0.5 * (float(x0) + float(x1)))
+        self._open_preview_at(0.5 * (float(x0) + float(x1)))
+
+    def _open_preview_at(self, centre: float):
+        if not _HAVE_PLAYER:
+            show_message("Preview", "This build has no QtMultimedia player.")
+            return
+        if not (self.ref_path and self.tgt_path):
+            show_message("Preview", "Pick both files first.")
+            return
+        ref_path, tgt_path = self._ordered_paths()
         dialog = PreviewDialog(self, ref_path, tgt_path,
-                               self._preview_plan, centre)
+                               self._preview_plan, max(0.0, float(centre)))
         dialog.exec()
+
+    def play_here(self):
+        """Listen to the selected measurement without hunting for the time."""
+        row = self.table.currentRow()
+        if not (0 <= row < len(self.points)):
+            show_message("Preview", "Pick a measurement in the table first.")
+            return
+        self._open_preview_at(float(self.points[row]["t"]))
 
     def export_audio(self):
         if not self.plan or not self.plan.get("segments"):

@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.7"
+APP_VERSION = "2.1.8"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -2149,6 +2149,11 @@ def _envelope_sos(sr: int = SCAN_SR):
                             btype="band", output="sos")
         _SCAN_SOS_CACHE[key] = sos
     return sos
+
+
+def _cores_default_value() -> int:
+    """All cores but two: enough to keep the desktop responsive."""
+    return max(1, (os.cpu_count() or 4) - 2)
 
 
 def _decode_workers() -> int:
@@ -4792,7 +4797,7 @@ class TimelinePanel:
                 "progress", (72.0 + 28.0 * done / max(total, 1),
                              f"{label} {done}/{total}")),
             should_stop=self.stop_event.is_set,
-            workers=int(self._num(self.var_cores, 4, 1, 64)))
+            workers=int(self._num(self.var_cores, _cores_default_value(), 1, 64)))
         points = sorted(compensate_points(raw, rate), key=lambda p: p["t"])
         self._post("scan_points", points)
         # After compensation the target can span the whole reference timeline
@@ -4845,7 +4850,7 @@ class TimelinePanel:
                 progress=lambda msg: self._post("status", msg),
                 on_fraction=self._decode_fraction,
                 should_stop=self.stop_event.is_set,
-                workers=int(self._num(self.var_cores, 4, 1, 64)))
+                workers=int(self._num(self.var_cores, _cores_default_value(), 1, 64)))
             self._decoded_key = pair_key
         self.ref_data, self.tgt_data, self.meta = ref, tgt, meta
         self.scan_rate = 1.0
@@ -4863,7 +4868,10 @@ class TimelinePanel:
                        f"Framerate hint {hint:+.3f} ms/s – pre-warping target "
                        f"(atempo {scan_rate:.8f}) and scanning…")
         else:
-            self._post("status", f"Measuring every {step:.0f}s ({mode})…")
+            self._post("status",
+                       f"Measuring every {step:.0f}s ({mode}) on "
+                       f"{self._num(self.var_cores, _cores_default_value(), 1, 64):.0f} "
+                       "threads…")
 
         coarse = 0.0
         try:

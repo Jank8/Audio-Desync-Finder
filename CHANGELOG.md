@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.8 / 2.1.8
+
+- **All cores but two, everywhere.** Cores already defaulted to `cpu_count - 2`
+  (12 threads -> 10 on this machine) and drove the decoding slices and the new
+  measurement pool; the Tk build still fell back to 4 when the field was empty,
+  which quietly halved the scan. It falls back to the same number now.
+- The scan line says what it uses: `Measuring every 30s (auto) on 10 threads…`,
+  and the Cores tooltip names both jobs.
+
 ## 3.1.7 / 2.1.7
 
 - **Measuring the points uses the cores too.** Decoding was parallel, the scan

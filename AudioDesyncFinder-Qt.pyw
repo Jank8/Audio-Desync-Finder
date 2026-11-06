@@ -2475,7 +2475,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.7"
+APP_VERSION = "3.1.8"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2953,7 +2953,9 @@ class MainWindow(FluentWindow):
         self.entry_cores.setFixedWidth(80)
         self.entry_cores.setAlignment(Qt.AlignCenter)
         self.entry_cores.setValidator(QIntValidator(1, max(1, _os.cpu_count() or 1), self))
-        self.entry_cores.setToolTip("Decoding threads; each one is a separate FFmpeg slice")
+        self.entry_cores.setToolTip(
+            "Decoding slices and measurement threads; the default is every core "
+            "but two")
         sl.addWidget(self.entry_cores)
         sl.addWidget(StrongBodyLabel("Signal"))
         self.combo_signal = ComboBox()
@@ -3312,7 +3314,9 @@ class MainWindow(FluentWindow):
                 scan_tgt = resample_track(tgt, rate)
             else:
                 self.ui_queue.put(("progress", (
-                    68, f"Measuring every {step:.0f}s ({mode})…")))
+                    68, f"Measuring every {step:.0f}s ({mode}) on "
+                        f"{self._num(self.entry_cores, _decode_workers()):.0f} "
+                        "threads…")))
                 scan_tgt = tgt
             coarse = 0.0
             try:

@@ -4571,23 +4571,6 @@ class TimelinePanel:
         footer = tk.Frame(win, bg=BG_DARK)
         footer.pack(fill=tk.X, padx=14, pady=(10, 12))
 
-        self.var_fix_offset = tk.BooleanVar(value=False)
-        self.var_fix_tempo = tk.BooleanVar(value=False)
-        for text, var, tip in (
-                ("Offset", self.var_fix_offset,
-                 "apply the offset only - one delay, no fitted segments"),
-                ("FPS tempo", self.var_fix_tempo,
-                 "apply only the tempo the framerates imply")):
-            box = tk.Checkbutton(footer, text=text, variable=var, bg=BG_PANEL,
-                                 fg=FG_DIM, selectcolor=BG_INPUT, bd=0,
-                                 highlightthickness=0, activebackground=BG_PANEL,
-                                 activeforeground="#ffffff", font=("Segoe UI", 8))
-            box.pack(side=tk.LEFT, padx=(0, 8))
-            try:
-                _tooltip(box, tip)
-            except Exception:
-                pass
-
         self.btn_preview = tk.Button(footer, text="▶ Preview",
                                      command=self.preview, bg="#333333",
                                      fg="#ffffff", relief=tk.FLAT,
@@ -4995,9 +4978,8 @@ class TimelinePanel:
 
     def _preview_plan(self):
         """The plan the preview uses; before a scan that is a flat zero."""
-        variant = self._export_plan_variant() or {}
-        if variant.get("segments"):
-            return variant
+        if (self.plan or {}).get("segments"):
+            return self.plan
         duration = float((self.meta or {}).get("ref_duration") or 0.0)
         return {"segments": [{"t_start": 0.0, "t_end": max(duration, 1.0),
                               "offset": 0.0, "slope": 0.0, "atempo": 1.0,
@@ -5005,31 +4987,11 @@ class TimelinePanel:
                 "jumps": [], "initial_offset": 0.0, "duration": duration,
                 "warnings": []}
 
-    def _export_plan_variant(self):
-        """The plan the export uses: the model, or a simple offset/tempo fix."""
-        plan = self.plan or {}
-        want_offset = bool(self.var_fix_offset.get())
-        want_tempo = bool(self.var_fix_tempo.get())
-        if not (want_offset or want_tempo):
-            return plan
-        hint = self._fps_slope()
-        offset = float(plan.get("initial_offset") or 0.0) if want_offset else 0.0
-        slope = float(hint) if (want_tempo and hint) else 0.0
-        duration = float(plan.get("duration") or 0.0)
-        console_log(f"Simple export: offset {offset:+.1f} ms, "
-                    f"atempo {1.0 + slope / 1000.0:.8f}", "info")
-        return {"segments": [{"t_start": 0.0, "t_end": duration,
-                              "offset": offset, "slope": slope,
-                              "atempo": 1.0 + slope / 1000.0,
-                              "n": 0, "rms": 0.0, "locked": True}],
-                "jumps": [], "initial_offset": offset, "duration": duration,
-                "warnings": []}
-
     def _task_export(self, out_path: str) -> None:
         def report(pct, text):
             self._post("progress", (pct, text))
 
-        plan = self._export_plan_variant()
+        plan = self.plan
         export_plan(plan, self.target_path, out_path, progress=report,
                     log=console_log, should_stop=self.stop_event.is_set)
 

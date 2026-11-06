@@ -951,15 +951,17 @@ def measure_pair(a, b, t: float, window: float, sos=None, mode: str = "auto"):
 
 
 def refine_breakpoints(a, b, plan, duration: float,
-                       half_span: float = 45.0, window: float = 6.0,
-                       step: float = 2.0, mode: str = "auto", should_stop=None):
+                       half_span: float = 60.0, window: float = 4.0,
+                       step: float = 1.0, mode: str = "auto", should_stop=None,
+                       workers: int = 1):
     """
-    Re-measure around every detected jump with short windows.
+    Re-measure around every detected jump with short windows, densely.
 
-    A 40 s analysis window blurs the exact position of an edit to about
-    half a window.  Scanning the neighbourhood with 6 s windows pins the
-    breakpoint down to a couple of seconds, which is what decides where the
-    export cuts the audio.
+    A 40 s analysis window blurs the exact position of an edit to about half a
+    window, and the coarse scan itself only lands every 30 s.  Two minutes either
+    side are measured every second with 4 s windows, so the chart is packed where
+    it matters and the breakpoint is visible to the second - which is what
+    decides where the export cuts the audio.
     """
     extra = []
     for jump in plan.get("jumps") or []:
@@ -971,7 +973,7 @@ def refine_breakpoints(a, b, plan, duration: float,
             continue
         extra.extend(scan_arrays(a, b, window=window, step=step,
                                  t_from=low, t_to=high, mode=mode,
-                                 should_stop=should_stop))
+                                 should_stop=should_stop, workers=workers))
     return extra
 
 
@@ -2475,7 +2477,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.9"
+APP_VERSION = "3.1.10"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3388,8 +3390,12 @@ class MainWindow(FluentWindow):
                 self.ui_queue.put(("progress", (
                     71, f"Refining {len(plan['jumps'])} jump position(s)…")))
                 extra_points = refine_breakpoints(
-                    ref, tgt, plan, meta["ref_duration"], mode=mode,
-                    should_stop=self.stop_event.is_set)
+                    ref, scan_tgt, plan, meta["ref_duration"], mode=mode,
+                    should_stop=self.stop_event.is_set,
+                    workers=int(self._num(self.entry_cores, _decode_workers())))
+                if extra_points and coarse:
+                    for point in extra_points:
+                        point["offset"] = round(point["offset"] + coarse, 2)
                 if extra_points:
                     extra_points = compensate_points(extra_points, rate)
                     points = sorted(points + extra_points, key=lambda p: p["t"])

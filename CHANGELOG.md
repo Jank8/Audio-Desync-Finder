@@ -3,6 +3,17 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.10 / 2.1.10
+
+- **Cuts are measured densely.** The refinement around a jump used to sample
+  45 s either side with 6 s windows every 2 s; it now covers 60 s either side
+  with 4 s windows every second - about 120 measurements around the splice
+  instead of 45 - so the chart is packed exactly where the cut is and the
+  breakpoint is visible to the second.
+- The refinement runs on the Cores pool and measures against the same (possibly
+  coarse-shifted) target as the scan, so its points land in the same frame
+  instead of a shifted one.
+
 ## 3.1.9 / 2.1.9
 
 - **The preview slider no longer stutters.** Dragging the handle used to seek

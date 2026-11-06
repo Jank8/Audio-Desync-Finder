@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.2 / 2.1.2
+
+- **Closing the preview stops the sound.** The two players are children of the
+  window, and Qt keeps them running while it hides: leaving the window with
+  Close or Esc left the target audio playing behind the main window. Both are now
+  stopped and their sources detached on close, on Esc and on accept.
+
 ## 3.1.1 / 2.1.1
 
 - **The preview renders nothing.** The render fallback is gone: it encoded 30 s

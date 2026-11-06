@@ -2345,7 +2345,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2680,6 +2680,31 @@ class PreviewDialog(QDialog):
             self.tgt_player.play()
             self._sync.start(400)
             self.btn_play.setText("⏸ Pause")
+
+    def _shutdown(self):
+        """Stop both players and detach the sources before the window goes."""
+        try:
+            self._sync.stop()
+        except Exception:
+            pass
+        for player in (self.ref_player, self.tgt_player):
+            try:
+                player.stop()
+                player.setSource(QUrl())
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        self._shutdown()
+        super().closeEvent(event)
+
+    def reject(self):
+        self._shutdown()
+        super().reject()
+
+    def done(self, result):
+        self._shutdown()
+        super().done(result)
 
     def _on_error(self, *_args):
         self._live = False

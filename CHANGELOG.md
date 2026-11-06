@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.7 / 2.1.7
+
+- **Measuring the points uses the cores too.** Decoding was parallel, the scan
+  itself was a plain loop: one window after another. The windows are independent,
+  so they now run in a pool of Cores threads (scipy's FFT releases the GIL) and
+  the results come back in timeline order. Measured on an hour of audio:
+  15.7 s -> 8.2 s, and the progress bar keeps moving because the work is handed
+  over in batches of four per thread.
+- The Cores setting drives both the decoding slices and the measurement pool.
+
 ## 3.1.6 / 2.1.6
 
 - **The preview seeks the whole film.** The 30 s window is gone: the slider runs

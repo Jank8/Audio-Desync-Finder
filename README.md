@@ -61,9 +61,9 @@ audio cache.
 
 Two builds sit side by side, same engine, same results:
 
-- `AudioDesyncFinder-Qt.pyw` - **3.1.15**, Qt/Fluent interface with Mica (needs PySide6,
+- `AudioDesyncFinder-Qt.pyw` - **3.1.16**, Qt/Fluent interface with Mica (needs PySide6,
   which installs itself)
-- `AudioDesyncFinder-Tk.pyw` - **2.1.15**, Tk interface (needs only numpy, scipy,
+- `AudioDesyncFinder-Tk.pyw` - **2.1.16**, Tk interface (needs only numpy, scipy,
   matplotlib and FFmpeg)
 
 **The only difference is the UI.** Scanning, the offset model, drift and jump

@@ -2060,6 +2060,31 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     }
 
 
+def model_quality(plan) -> str:
+    """
+    One plain sentence about how well the points sit on the fitted lines.
+
+    RMS is the only honest number here: it says how far a typical measurement is
+    from the model.  A few milliseconds means the lines are supported; tens of
+    milliseconds mean the model is fitting noise, whatever the chart looks like.
+    """
+    segments = (plan or {}).get("segments") or []
+    if not segments:
+        return ""
+    worst = max(float(s.get("rms") or 0.0) for s in segments)
+    cuts = len(segments) - 1
+    if worst <= 12.0:
+        return (f"Model quality: good - the points sit on the line "
+                f"(worst RMS {worst:.0f} ms, {cuts} cut(s)).")
+    if worst <= 30.0:
+        return (f"Model quality: fair - some segments scatter (worst RMS "
+                f"{worst:.0f} ms). A longer window measures more audio and "
+                "holds better.")
+    return (f"Model quality: weak - segments scatter by tens of milliseconds "
+            f"(worst RMS {worst:.0f} ms), so the model is fitting noise. Try "
+            "Window 80 with Step 80, or raise Min confidence.")
+
+
 def mismatch_text(plan) -> str:
     """
     One loud sentence when the target is not the same cut, else "".
@@ -2502,7 +2527,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.15"
+APP_VERSION = "3.1.16"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3173,6 +3198,8 @@ class MainWindow(FluentWindow):
         ml.addWidget(self.mismatch_label)
         self.summary = StrongBodyLabel("")
         ml.addWidget(self.summary)
+        self.quality = BodyLabel("")
+        ml.addWidget(self.quality)
         self.mux_label = BodyLabel("")
         self.mux_label.setWordWrap(True)
         self.mux_label.setStyleSheet(
@@ -3746,6 +3773,12 @@ class MainWindow(FluentWindow):
         self.summary.setText(text)
         self.summary.setStyleSheet(
             f"color: {self.accent}; font: 600 11pt 'Segoe UI';")
+        note = model_quality(self.plan)
+        self.quality.setText(note)
+        worst = max(float(s.get("rms") or 0.0) for s in segments)
+        colour = "#5fd38d" if worst <= 12.0 else (
+            "#ffb454" if worst <= 30.0 else "#ff5a5f")
+        self.quality.setStyleSheet(f"color: {colour}; font: 9pt 'Segoe UI';")
         self._update_mux_hint()
 
     def _update_mux_hint(self) -> None:

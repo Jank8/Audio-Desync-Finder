@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.16 / 2.1.16
+
+- **The model grades itself.** Under the headline numbers there is a plain
+  sentence about the fit, built from the worst RMS of any segment:
+  `good` up to 12 ms, `fair` up to 30 ms, `weak` above that - and `weak` says what
+  to change (Window 80 / Step 80, or a higher Min confidence). The Tk build logs
+  the same line. Without it, 80/80 (RMS 6 ms) and 60/60 (RMS 54 ms) look equally
+  convincing on the chart.
+
 ## 3.1.15 / 2.1.15
 
 - **A short step is called out.** `Step` far below `Window` (step < window / 3)

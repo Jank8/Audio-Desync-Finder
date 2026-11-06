@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.15"
+APP_VERSION = "2.1.16"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3877,6 +3877,31 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     }
 
 
+def model_quality(plan) -> str:
+    """
+    One plain sentence about how well the points sit on the fitted lines.
+
+    RMS is the only honest number here: it says how far a typical measurement is
+    from the model.  A few milliseconds means the lines are supported; tens of
+    milliseconds mean the model is fitting noise, whatever the chart looks like.
+    """
+    segments = (plan or {}).get("segments") or []
+    if not segments:
+        return ""
+    worst = max(float(s.get("rms") or 0.0) for s in segments)
+    cuts = len(segments) - 1
+    if worst <= 12.0:
+        return (f"Model quality: good - the points sit on the line "
+                f"(worst RMS {worst:.0f} ms, {cuts} cut(s)).")
+    if worst <= 30.0:
+        return (f"Model quality: fair - some segments scatter (worst RMS "
+                f"{worst:.0f} ms). A longer window measures more audio and "
+                "holds better.")
+    return (f"Model quality: weak - segments scatter by tens of milliseconds "
+            f"(worst RMS {worst:.0f} ms), so the model is fitting noise. Try "
+            "Window 80 with Step 80, or raise Min confidence.")
+
+
 def mismatch_text(plan) -> str:
     """
     One loud sentence when the target is not the same cut, else "".
@@ -4973,6 +4998,9 @@ class TimelinePanel:
 
         for line in plan_report_lines(plan):
             console_log(line, "ok")
+        quality = model_quality(plan)
+        if quality:
+            console_log(quality, "warn" if "weak" in quality else "info")
         self._post("plan", plan)
         if not self.stop_event.is_set():
             save_result(result_key_value, points, plan)

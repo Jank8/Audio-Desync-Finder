@@ -2502,7 +2502,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.12"
+APP_VERSION = "3.1.13"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2826,16 +2826,29 @@ class PreviewDialog(QDialog):
 
     # ---- live playback -----------------------------------------------------
     def _seek_to(self, t):
+        """
+        Jump somewhere and play from there.
+
+        The players are paused before the position changes and resumed after:
+        seeking a playing stream with two players at once is what makes the
+        picture stall, while a seek from pause is cheap.  The playback rate is
+        only touched when it actually changes, which is another known hiccup.
+        """
         self.start = max(0.0, min(float(t), self._total_duration()))
         if self._live:
+            self._sync.stop()
+            self.ref_player.pause()
+            self.tgt_player.pause()
             self._apply_plan_at(self.start)
             self.ref_player.setPosition(int(self.start * 1000))
             audio_at = max(0.0, self.start + self._offset_at(self.start) / 1000.0)
             self.tgt_player.setPosition(int(audio_at * 1000))
-            try:
-                self.tgt_player.setPlaybackRate(self._atempo)
-            except Exception:
-                pass
+            if abs(self._atempo - getattr(self, "_rate_applied", 0.0)) > 1e-9:
+                try:
+                    self.tgt_player.setPlaybackRate(self._atempo)
+                    self._rate_applied = self._atempo
+                except Exception:
+                    pass
             self.ref_player.play()
             self.tgt_player.play()
             self._sync.start(400)

@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.13 / 2.1.13
+
+- **`Go to` no longer stalls the picture.** It seeked while both players were
+  running, and a playing stream with a pending rate change is exactly what the
+  FFmpeg backend chokes on. The jump now pauses the players, moves the positions,
+  sets the rate only when it really changes and resumes - the click on the
+  timeline was smooth because it went through the drag path, which already
+  paused first. Measured: every jump lands in ~0.35 s and ends in playback.
+
 ## 3.1.12 / 2.1.12
 
 - **Clicking the timeline now really seeks.** The first version passed

@@ -2442,7 +2442,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.5"
+APP_VERSION = "3.1.6"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2667,9 +2667,9 @@ class PreviewDialog(QDialog):
         layout.addWidget(self.slider)
 
         row = QHBoxLayout()
-        self.btn_back = QPushButton("⏪ 30 s")
+        self.btn_back = QPushButton("⏪ 10 min")
         self.btn_play = QPushButton("⏸ Pause")
-        self.btn_fwd = QPushButton("30 s ⏩")
+        self.btn_fwd = QPushButton("10 min ⏩")
         self.btn_close = QPushButton("Close")
         for button in (self.btn_back, self.btn_play, self.btn_fwd):
             row.addWidget(button)
@@ -2679,8 +2679,8 @@ class PreviewDialog(QDialog):
         self.status = QLabel("", self)
         layout.addWidget(self.status)
 
-        self.btn_back.clicked.connect(lambda: self._seek_to(self.start - self.SPAN))
-        self.btn_fwd.clicked.connect(lambda: self._seek_to(self.start + self.SPAN))
+        self.btn_back.clicked.connect(lambda: self._seek_to(self.start - 600.0))
+        self.btn_fwd.clicked.connect(lambda: self._seek_to(self.start + 600.0))
         self.btn_close.clicked.connect(self.close)
         self.btn_play.clicked.connect(self._toggle)
         self.slider.sliderMoved.connect(self._scrub)
@@ -2726,7 +2726,7 @@ class PreviewDialog(QDialog):
 
     # ---- live playback -----------------------------------------------------
     def _seek_to(self, t):
-        self.start = max(0.0, float(t))
+        self.start = max(0.0, min(float(t), self._total_duration()))
         if self._live:
             self._apply_plan_at(self.start)
             self.ref_player.setPosition(int(self.start * 1000))
@@ -2740,9 +2740,9 @@ class PreviewDialog(QDialog):
             self.tgt_player.play()
             self._sync.start(400)
             self.status.setText(
-                f"{format_timecode(self.start)} - live, "
-                f"offset {self._offset_at(self.start):+.0f} ms, "
-                f"atempo {self._atempo:.6f}")
+                f"{format_timecode(self.start)} / {format_timecode(self._total_duration())}"
+                f"  ·  offset {self._offset_at(self.start):+.0f} ms"
+                f"  ·  atempo {self._atempo:.6f}")
         else:
             self.status.setText(
                 "QtMultimedia is missing - this build cannot preview.")
@@ -2758,12 +2758,19 @@ class PreviewDialog(QDialog):
     def _on_position(self, position):
         if self.slider.isSliderDown():
             return
-        span = self.SPAN
-        value = (position / 1000.0 - self.start) / span
+        duration = self._total_duration()
+        value = (position / 1000.0) / duration
         self.slider.setValue(int(max(0.0, min(1.0, value)) * 1000))
 
+    def _total_duration(self):
+        position_based = self.ref_player.duration() / 1000.0
+        if position_based > 1.0:
+            return position_based
+        plan = self.plan_getter() or {}
+        return max(1.0, float(plan.get("duration") or 1.0))
+
     def _scrub(self, value):
-        self._seek_to(self.start + self.SPAN * value / 1000.0)
+        self._seek_to(self._total_duration() * value / 1000.0)
 
     def _toggle(self):
         playing = self.ref_player.playbackState() == QMediaPlayer.PlayingState

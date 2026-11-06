@@ -3,6 +3,13 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.6 / 2.1.6
+
+- **The preview seeks the whole film.** The 30 s window is gone: the slider runs
+  from the start to the end of the film, the buttons jump 10 minutes each way, and
+  the status names the position as `5:00 / 1:30:46 · offset +0 ms · atempo
+  1.000000`. Seeking stops at the ends instead of running past them.
+
 ## 3.1.5 / 2.1.5
 
 - **Preview works before the first scan.** The button no longer waits for a plan:

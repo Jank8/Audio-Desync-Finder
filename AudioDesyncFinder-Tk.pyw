@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.16"
+APP_VERSION = "2.1.17"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3248,7 +3248,14 @@ def speed_hint(ref_path, tgt_path, fps_ref=None, fps_tgt=None):
     if not framerate_differs(fps_ref, fps_tgt):
         return None                      # same framerate: the gap is an edit
     fps_ratio = fps_ref / fps_tgt
-    if abs(length_ratio - fps_ratio) < 0.02:
+    # A target running at fps_tgt is dur_ref * fps_ref / fps_tgt long, so the
+    # duration ratio it implies is fps_tgt / fps_ref - the inverse of fps_ratio.
+    # Comparing against fps_ratio itself only worked while the two rates were
+    # nearly equal; a 24 -> 25 pair (4 % faster, ratio 1.042 against 0.96) read
+    # as "a different edit" and the target was never pre-warped, which is why
+    # such a pair measured as noise.
+    expected_ratio = 1.0 / fps_ratio
+    if abs(length_ratio - expected_ratio) < 0.02:
         return framerate_slope(fps_ref, fps_tgt)
     if 0.45 < fps_ratio < 0.55 or 1.95 < fps_ratio < 2.05:
         if any(abs(length_ratio - k) < 0.01 for k in known):

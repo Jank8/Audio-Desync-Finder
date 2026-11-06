@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.17 / 2.1.17
+
+- **A 24 -> 25 pair is recognised as a speed change.** `speed_hint()` compared
+  the duration ratio with `fps_ref / fps_tgt`, but a target running at fps_tgt is
+  `fps_ref / fps_tgt` **times longer**, so the ratio it implies is the inverse.
+  The test only worked while both rates were nearly equal (23.976 vs 24 slips
+  through either way); a 24 -> 25 pair read as "a different edit", the target was
+  never pre-warped, and every 80 s window carried 3.3 s of drift inside it, which
+  smeared every correlation into the 40 s cloud. Measured after the fix:
+  `24 -> 25 = -40.0 ms/s` (atempo 0.960000), `23.976 -> 24 = -1.0 ms/s`,
+  `25 -> 24 = +41.7 ms/s`, same framerate with a longer intro = no hint.
+
 ## 3.1.16 / 2.1.16
 
 - **The model grades itself.** Under the headline numbers there is a plain

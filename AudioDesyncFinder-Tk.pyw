@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.22"
+APP_VERSION = "2.1.23"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4695,6 +4695,10 @@ class TimelinePanel:
         tk.Button(pts_btns, text="Delete", command=self.delete_selected,
                   bg="#7a2a1a", fg="#ffffff", relief=tk.FLAT, font=("Segoe UI", 8),
                   cursor="hand2", activebackground="#8a3a2a").pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 3), ipady=3)
+        tk.Button(pts_btns, text="Delete off-line", command=self.prune_points,
+                  bg="#7a2a1a", fg="#ffffff", relief=tk.FLAT, font=("Segoe UI", 8),
+                  cursor="hand2", activebackground="#8a3a2a").pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0), ipady=3)
 
         manual = tk.Frame(left, bg=BG_PANEL)
@@ -5348,6 +5352,29 @@ class TimelinePanel:
                 self.points[idx]["enabled"] = not self.points[idx].get("enabled", True)
         self._refresh_points()
         self._rebuild_plan()
+
+    def prune_points(self) -> None:
+        """Drop every measurement that is not sitting on the fitted line."""
+        plan = getattr(self, "plan", None) or {}
+        if not self.points or not (plan.get("segments") or []):
+            messagebox.showwarning("Delete off-line", "Scan the files first.",
+                                   parent=self.frame)
+            return
+        kept = [p for p in self.points if self._on_model(p)]
+        removed = len(self.points) - len(kept)
+        if removed == 0:
+            console_log("Every point already sits on the line.", "info")
+            return
+        if not kept:
+            messagebox.showwarning("Delete off-line",
+                                   "That would remove every measurement.",
+                                   parent=self.frame)
+            return
+        self.points = kept
+        self._refresh_points()
+        self._rebuild_plan()
+        console_log(f"Removed {removed} point(s) that were off the line; "
+                    f"{len(kept)} left.", "info")
 
     def delete_selected(self) -> None:
         drop = {int(self.tree.item(i, "values")[0]) - 1 for i in self.tree.selection()}

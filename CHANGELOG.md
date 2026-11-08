@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.23 / 2.1.23
+
+- **`Delete off-line points`.** One button drops every measurement whose status
+  cell is blue - the ones that do not sit on the fitted line - and refits the
+  model from what is left, so the next comparison is made against the new lines
+  and not the old ones. It refuses when there is no model yet or when nothing
+  would be left, and logs how many were removed. Measured: 14 points with four
+  deliberately shifted -> 10 left, one segment.
+
 ## 3.1.22 / 2.1.22
 
 - **The dot is a coloured cell now.** Emoji glyphs did not render at all in the

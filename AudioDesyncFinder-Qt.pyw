@@ -2700,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.22"
+APP_VERSION = "3.1.23"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3449,6 +3449,12 @@ class MainWindow(FluentWindow):
         self.btn_del = PushButton("Delete selected point")
         self.btn_del.clicked.connect(self.delete_point)
         bar.addWidget(self.btn_del)
+        self.btn_prune = PushButton("Delete off-line points")
+        self.btn_prune.setToolTip(
+            "Remove every measurement that does not sit on the fitted line "
+            "(the blue dots)")
+        self.btn_prune.clicked.connect(self.prune_points)
+        bar.addWidget(self.btn_prune)
         self.btn_anchors = PushButton("Anchors…")
         self.btn_anchors.setToolTip(
             "Measure the start and the end only: says whether the file shifted "
@@ -4180,6 +4186,42 @@ class MainWindow(FluentWindow):
                 if col == 1:
                     item.setForeground(QColor(self._point_colour(p)))
                 self.table.setItem(i, col, item)
+
+    def _rebuild_from_points(self):
+        """Refit the plan after points were removed by hand."""
+        plan = build_plan(self.points, self.meta["ref_duration"],
+                          min_conf=self._num(self.entry_conf, 2),
+                          slope_hint=self._fps_hint(),
+                          allow_drift=getattr(self, "allow_drift", True))
+        if self.chk_single.isChecked():
+            plan = single_line_plan(self.points, self.meta["ref_duration"])
+        else:
+            plan = collapse_cancelling_jumps(plan)
+        self.plan = plan
+        self._fill_table()
+        self._draw()
+
+    def prune_points(self):
+        """Drop everything that is not sitting on the fitted line."""
+        if not self.meta or not (self.plan or {}).get("segments"):
+            show_message("Delete off-line points",
+                         "Scan the files first - there is no model to compare with.")
+            return
+        kept = [p for p in self.points if self._point_colour(p) == "#ff5a5f"]
+        removed = len(self.points) - len(kept)
+        if removed == 0:
+            self.ui_queue.put(("log", "Every point already sits on the line."))
+            return
+        if not kept:
+            show_message("Delete off-line points",
+                         "That would remove every measurement - nothing left to fit.")
+            return
+        # the plan has to be rebuilt without the dropped points, otherwise the
+        # next comparison would still be made against the old lines
+        self.points = kept
+        self._rebuild_from_points()
+        self.ui_queue.put(("log", f"Removed {removed} point(s) that were off the "
+                                  f"line; {len(kept)} left."))
 
     def delete_point(self):
         row = self.table.currentRow()

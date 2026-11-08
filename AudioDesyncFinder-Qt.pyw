@@ -2700,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.19"
+APP_VERSION = "3.1.20"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3417,9 +3417,10 @@ class MainWindow(FluentWindow):
         row = QHBoxLayout()
         row.addWidget(self.canvas, 3)
         self.table = TableWidget()
-        self.table.setColumnCount(4)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["Time", "Offset (ms)", "Conf", "Source"])
+            ["", "Time", "Offset (ms)", "Conf", "Source"])
+        self.table.setColumnWidth(0, 32)
         self.table.verticalHeader().hide()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(6)
@@ -4156,14 +4157,22 @@ class MainWindow(FluentWindow):
             return float(default)
 
     def _fill_table(self):
+        """One row per measurement, with a dot that says how it sits on the model."""
         self.table.setRowCount(len(self.points))
         for i, p in enumerate(self.points):
             source = "manual" if p.get("kind") == "manual" else (
                 "wave" if p.get("mode") == "w" else "env")
+            dot = QTableWidgetItem("●")
+            dot.setForeground(QColor(self._point_colour(p)))
+            dot.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 0, dot)
             for col, text in enumerate((format_timecode(p["t"]),
                                         f"{p['offset']:+.1f}",
-                                        f"{p.get('conf', 0):.1f}", source)):
-                self.table.setItem(i, col, QTableWidgetItem(text))
+                                        f"{p.get('conf', 0):.1f}", source), start=1):
+                item = QTableWidgetItem(text)
+                if col == 1:
+                    item.setForeground(QColor(self._point_colour(p)))
+                self.table.setItem(i, col, item)
 
     def delete_point(self):
         row = self.table.currentRow()

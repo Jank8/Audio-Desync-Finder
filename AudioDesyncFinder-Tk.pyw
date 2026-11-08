@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.19"
+APP_VERSION = "2.1.20"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -4679,6 +4679,7 @@ class TimelinePanel:
                 ("idx", "#", 30, tk.CENTER),
                 ("t", "Time", 80, tk.CENTER),
                 ("off", "Offset (ms)", 100, tk.E),
+                ("mark", "●", 26, tk.CENTER),
                 ("conf", "Conf", 50, tk.E),
                 ("kind", "Source", 80, tk.CENTER)):
             self.tree.heading(col, text=head)
@@ -5509,6 +5510,19 @@ class TimelinePanel:
         self.status_var.set(f"Plan loaded: {os.path.basename(path)}")
 
     # ------------------------------------------------------------ display --
+    def _on_model(self, point) -> bool:
+        """True when the measurement sits on the fitted line, like the red dots."""
+        plan = getattr(self, "plan", None) or {}
+        segments = plan.get("segments") or []
+        t = float(point["t"])
+        for segment in segments:
+            if float(segment["t_start"]) <= t <= float(segment["t_end"]):
+                model = float(segment["offset"]) + float(segment["slope"]) * (
+                    t - float(segment["t_start"]))
+                tolerance = max(8.0, min(30.0, 0.5 * float(segment.get("rms") or 0.0)))
+                return abs(float(point["offset"]) - model) <= tolerance
+        return False
+
     def _refresh_points(self) -> None:
         self.tree.delete(*self.tree.get_children())
         for i, point in enumerate(self.points):
@@ -5517,14 +5531,19 @@ class TimelinePanel:
                 source = "manual"
             else:
                 source = "wave" if point.get("mode") == "w" else "env"
+            tags = ["off"] if not enabled else (
+                ["on_model"] if self._on_model(point) else ["off_model"])
             self.tree.insert("", tk.END, values=(
                 i + 1,
+                "●",
                 format_timecode(point["t"]),
                 f"{point['offset']:+.1f}",
                 f"{point.get('conf', point.get('ncc', 0)):.1f}",
                 source + ("" if enabled else " (off)"),
-            ), tags=("off",) if not enabled else ())
+            ), tags=tuple(tags))
         self.tree.tag_configure("off", foreground="#666666")
+        self.tree.tag_configure("on_model", foreground="#ff5a5f")
+        self.tree.tag_configure("off_model", foreground="#7f8aa3")
 
     def _refresh_plan(self) -> None:
         self.seg_tree.delete(*self.seg_tree.get_children())

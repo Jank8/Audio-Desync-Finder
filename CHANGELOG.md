@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.20 / 2.1.20
+
+- **The measurement list says which points are good.** A dot column in front of
+  the time, red when the point sits on the fitted line and blue when it does not
+  - the same rule and colour the chart uses, from `_point_colour()`. The time is
+  tinted to match, so a bad row is visible without reading the offsets. The Tk
+  build colours the whole row through two treeview tags.
+
 ## 3.1.19 / 2.1.19
 
 - **`Anchors…`: measure only the start and the end.** One long window near each

@@ -1,5 +1,69 @@
 # Changelog
 
+## 4.0.0
+
+The programme was rebuilt from scratch. Everything below the interface is new; the
+interface itself is the same Fluent/Mica shell, now with the pieces that had been
+added to it over time.
+
+**The idea it is built on:** a dub replaces the dialogue and keeps the music,
+effects and ambience. So a block that does not match is not a cut and not junk -
+it is a block without evidence, and the offset across it is interpolated.
+
+Engine:
+
+- blocks of 80 s measured on a 10 ms envelope, with a **±90 s** lag search; the
+  old narrow search followed the previous block, lost the lock on a real pair and
+  reported the entire second half as dialogue
+- evidence is chosen **by consensus** (blocks above half the film's median
+  support, then a robust line with outliers dropped and refitted) instead of by a
+  fixed contrast threshold, which threw away nine blocks in ten on real audio
+- structure is found by **binary segmentation** on those blocks; a step needs at
+  least 300 ms and has to halve the scatter of the stretch
+- **digital holes**: stretches where the target sits at -90 dBFS while the
+  reference has sound are black inserts or missing scenes. They need no
+  correlation, so the cut is placed on them exactly - on the reference pair the
+  hole is at 1:45:40 and lasts 6.2 s, and the boundary moved there from 1:47:20
+- **framerate** is only believed when the running times agree with it; a 30.000 fps
+  flag on a 23.976 film would otherwise squeeze the target to 80 % of its length
+- **Single line** fits one robust line through every usable block, for material
+  where the model invents structure
+- export keeps the **source codec, sample rate and channel layout** (AC-3 5.1
+  stays AC-3 5.1) and refuses a stepped model that would need padding
+
+Interface:
+
+- drag and drop into the field under the pointer, two files at once
+- wheel zoom around the pointer, drag to pan, double click to restore, and an axis
+  that ticks in minutes and hours instead of seconds
+- clicking a point selects its row; `Delete point`, `Play from here`
+- `Sample` draws both soundtracks stacked on one timeline so a hole is visible
+- `Preview` plays both films side by side, with a switch for each soundtrack, and
+  stops both players when it closes
+- `Cores` for parallel decoding, `Signal` (Auto / Envelope / Waveform)
+- export runs in the background with a progress bar and reports the residual
+  against the reference
+- the neon waveform icon is drawn in code, as before
+
+Measured on the reference pair (extended 4K against a Polish lektor):
+
+```
+2 segments, 131 of 171 blocks the same audio
+0-6340 s  +60 ms    6340 s onward  +7457 ms
+cut placed on the digital hole at 1:45:40
+```
+
+Known limits: a model that has to insert silence is refused at export (only skips
+are verified), and the model built from the black-insert sequence is a diagnostic
+only.
+
+---
+
+# History
+
+The entries below belong to the previous line (3.1.x / 2.1.x), kept for reference.
+
+
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 

@@ -1,79 +1,92 @@
-# Audio Desync Finder 3.0
+# Audio Desync Finder 4
 
-Finds and fixes the audio offset between two releases - different framerates,
-different dubs, different edits - and exports a corrected Matroska Audio track.
+Measures how two releases of the same film are offset, and writes the corrected
+audio back with the source's own codec.
 
-<img width="1860" height="1290" alt="obraz" src="https://github.com/user-attachments/assets/1f6b1696-263f-4e03-a2e3-3904a197fff8" />
+This is a**rebuild**. The interface is the familiar Fluent/Mica shell; everything
+under it was written again around one idea that the previous version kept getting
+wrong:
 
-<img width="1860" height="1290" alt="obraz" src="https://github.com/user-attachments/assets/d7c59edd-0c0f-40d1-a51c-cd7de95b3a10" />
+> **A dub is a different recording of the dialogue and the same recording of
+> everything else.** Music, effects and ambience survive the dubbing; the voices
+> do not.
 
-## What it does
+So the film is measured block by block, every block is asked one question —
+*"is this the same audio at all?"* — and only the blocks that answer yes are
+allowed to shape the model. Blocks of re-recorded dialogue are not junk and not
+cuts: they are simply not evidence, and the offset across them is interpolated
+from the music on either side.
 
-- scans the whole runtime and fits a piecewise-linear offset model,
-- detects tempo drift (PAL 25 vs 23.976, 24 vs 23.976) and locks `atempo` to
-  the exact fps ratio,
-- detects edits (different intro, missing scene) and skips or pads audio at the
-  boundaries,
-- compares two language versions with energy-envelope correlation when the
-  waveform does not match,
-- exports `.mka` that needs no delay at mux time.
+## How it measures
 
-## Requirements
+1. **Blocks** (`Block`, 80 s by default): the 10 ms energy envelope of the
+   reference is correlated against the target over a wide lag range (±90 s). Each
+   block yields a lag, a *support* (how well it correlates) and a *contrast*.
+2. **Evidence.** Blocks above half the film's median support are candidates; a
+   robust line is fitted through them and blocks far off it are dropped and the
+   line refitted. The survivors are what the chart draws in blue.
+3. **Structure.** Boundaries are found by binary segmentation on those blocks —
+   a step needs to be at least 300 ms and to halve the scatter of the stretch.
+4. **Digital holes.** A stretch where the target is at −90 dBFS while the
+   reference still has sound is a black insert or a missing scene; those are
+   language independent, so they are used to place the cut exactly (the real pair
+   has one at 1:45:40 lasting 6.2 s, and the cut lands on it).
+5. **Framerate.** A difference in fps is only believed when the running times
+   agree with it; otherwise it is a container flag and is ignored.
+6. **Export** applies the model with ffmpeg, keeps the source's codec, sample rate
+   and channel layout (AC-3 5.1 stays AC-3 5.1, AAC 2.0 stays AAC 2.0), and then
+   measures the result against the reference.
 
-**Python 3.9+ only.** PySide6, PySide6-Fluent-Widgets, numpy, scipy and
-matplotlib install themselves on first launch; FFmpeg is offered via winget.
+## What you get
 
-## Usage
+```
+File 1: 23.976 fps      File 2: 23.976 fps      same framerate
+2 segments, built from 131 of 171 measured blocks
+Seg 1:      0.0-  6340.0s  offset    +60.0 ms  drift +0.000  [131 blocks, RMS 32 ms]
+Seg 2:   6340.0- 13691.7s  offset  +7457.5 ms  drift +0.031
+Quality: fair - a normal scatter for material with a voice on top
+MKVToolNix: no single delay fits this model (2 segments) - export the corrected audio
+```
 
-1. Run `AudioDesyncFinder-Qt.pyw`.
-2. Pick both files and set **Base** on the one whose timeline you keep.
-3. **Auto-scan whole file**, check the model, then **Export corrected audio**.
-   If the model is a single line with no drift, the header tells you the delay
-   to type into MKVToolNix instead - muxing the untouched audio is lossless, so
-   there is nothing to export in that case.
-4. Mux the `.mka` with mkvmerge - no `--sync`, no delay.
+and after an export:
 
-Starting the app while it is already running shows a message instead of a
-second window: two copies would fight over the same files and the same decoded
-audio cache.
+```
+Residual against the reference: +0.0 ms
+```
 
-## Controls
+## Interface
 
-| Control | What it does |
-|---|---|
-| **File 1 / File 2** | the two media files; choosing one loads it immediately |
-| **Base** | which file's timeline is the reference (the one you keep). The other becomes the target and is corrected. Framerates and the drift hint follow this choice |
-| **Window (s)** | length of one analysis window. 40 s is a good default: longer is steadier on music-heavy material, shorter follows rapid edits |
-| **Step (s)** | how often a window is measured. 30 s samples the offset twice a minute; smaller values give a denser curve but a slower scan |
-| **Min confidence** | how sharp the correlation peak must be for a measurement to count. 2 is permissive, 5+ strict. Raise it when the chart looks scattered - weak points are dropped from the model, not from the chart |
-| **Signal** | `Auto` tries the waveform first and falls back to the envelope; `Waveform` for same-language sources and music; `Envelope` for two different dubs |
-| **Auto-scan whole file** | runs the scan; progress goes to the bar, messages to the log |
-| **Stop** | stops a running scan or export |
-| **Clear cache** | deletes the decoded audio kept in `%LOCALAPPDATA%\AudioDesyncFinder\cache`; the next scan decodes the files again |
-| **Chart** | offset over time: dots are measurements, the green line is the fitted model |
-| **Table** | every measurement with time, offset, confidence and source (`wave` / `env`) |
-| **Delete selected point** | drops a bad measurement and re-fits the model at once |
-| **Fitted model** | one line per segment: time range, offset at its start, drift in ms/s and the resulting `atempo`. Above it, `Mux by hand:` gives the delay to enter in MKVToolNix when the plan is a single line with no drift (or says why a static delay cannot work) |
-| **Export corrected audio** | writes the `.mka`, then measures it again and prints the residual offset in the log |
-| **Line under the files** | detected framerates and the `atempo` they imply |
+- **Dragging** files over the window drops each one into the field under the
+  pointer; two at once fill File 1 and File 2.
+- **Chart**: wheel zooms around the pointer, dragging pans, double click restores,
+  the axis ticks in minutes and hours, and clicking a point selects its row.
+- **Sample** draws the two soundtracks stacked on one timeline, so a hole in the
+  target is an empty stretch of the lower trace.
+- **Preview** plays both films side by side with a switch for each soundtrack.
+- **Cores** drives the parallel decoding (the file is cut into slices and decoded
+  in parallel).
+- **Single line** replaces a model that invents structure with one offset and one
+  drift.
+- **Delete point**, **Play from here**, **Clear cache**, and an export that runs in
+  the background with a progress bar.
 
-## Files
+## Running
 
-Two builds sit side by side, same engine, same results:
+```
+pythonw AudioDesyncFinder.pyw
+```
 
-- `AudioDesyncFinder-Qt.pyw` - **3.1.26**, Qt/Fluent interface with Mica (needs PySide6,
-  which installs itself)
-- `AudioDesyncFinder-Tk.pyw` - **2.1.26**, Tk interface (needs only numpy, scipy,
-  matplotlib and FFmpeg)
+needs `ffmpeg` and `ffprobe` on `PATH`; the app installs the Python packages it
+needs itself (PySide6, qfluentwidgets, numpy, scipy, matplotlib).
 
-**The only difference is the UI.** Scanning, the offset model, drift and jump
-handling, export and residual measurement are the same code in both files, so
-either one produces an identical `.mka`. Pick whichever starts on your machine.
+Decoded tracks are cached in `%LOCALAPPDATA%\AudioDesyncFinder2\cache` and removed
+by `Clear cache`.
 
-What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+## Known limits
 
-## License
+- a model that has to **insert silence** cannot be exported yet (only skips are
+  verified end to end); the app says so rather than writing a wrong file,
+- the model built from the black-insert sequence is a diagnostic only: matching
+  49 gaps against 70 pairs the wrong ones and the levels do not hold.
 
-Copyright (C) 2026 Janusz Woźniak - GNU GPL v3 or later - [LICENSE](LICENSE),
-[full text](https://www.gnu.org/licenses/gpl-3.0.txt). Modified versions must
-stay under the same license and ship their source.
+See [CHANGELOG.md](CHANGELOG.md).

@@ -2700,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.20"
+APP_VERSION = "3.1.21"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3419,8 +3419,8 @@ class MainWindow(FluentWindow):
         self.table = TableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["", "Time", "Offset (ms)", "Conf", "Source"])
-        self.table.setColumnWidth(0, 32)
+            ["●", "Time", "Offset (ms)", "Conf", "Source"])
+        self.table.setColumnWidth(0, 40)
         self.table.verticalHeader().hide()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(6)
@@ -4162,9 +4162,13 @@ class MainWindow(FluentWindow):
         for i, p in enumerate(self.points):
             source = "manual" if p.get("kind") == "manual" else (
                 "wave" if p.get("mode") == "w" else "env")
-            dot = QTableWidgetItem("●")
-            dot.setForeground(QColor(self._point_colour(p)))
+            # an emoji dot carries its own colour, so the table theme cannot
+            # paint over it the way it does with a plain "●" + foreground brush
+            on_model = self._point_colour(p) == "#ff5a5f"
+            dot = QTableWidgetItem("🔴" if on_model else "🔵")
             dot.setTextAlignment(Qt.AlignCenter)
+            dot.setToolTip("on the fitted line" if on_model
+                           else "off the fitted line - background, not a measurement")
             self.table.setItem(i, 0, dot)
             for col, text in enumerate((format_timecode(p["t"]),
                                         f"{p['offset']:+.1f}",

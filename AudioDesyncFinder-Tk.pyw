@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.20"
+APP_VERSION = "2.1.21"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -5531,11 +5531,12 @@ class TimelinePanel:
                 source = "manual"
             else:
                 source = "wave" if point.get("mode") == "w" else "env"
+            on_model = self._on_model(point)
             tags = ["off"] if not enabled else (
-                ["on_model"] if self._on_model(point) else ["off_model"])
+                ["on_model"] if on_model else ["off_model"])
             self.tree.insert("", tk.END, values=(
                 i + 1,
-                "●",
+                "🔴" if on_model else "🔵",
                 format_timecode(point["t"]),
                 f"{point['offset']:+.1f}",
                 f"{point.get('conf', point.get('ncc', 0)):.1f}",

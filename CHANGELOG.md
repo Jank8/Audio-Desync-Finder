@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.21 / 2.1.21
+
+- **The dots are visible now.** A plain `●` coloured with a brush came out blue
+  in every row: the table theme paints its own foreground over the item's. The
+  dots are emoji now (🔴 on the fitted line, 🔵 off it), which carry their own
+  colour and cannot be overpainted, plus a tooltip that says which is which.
+  Verified: 13 red and 1 blue for a set with one deliberately shifted point.
+
 ## 3.1.20 / 2.1.20
 
 - **The measurement list says which points are good.** A dot column in front of

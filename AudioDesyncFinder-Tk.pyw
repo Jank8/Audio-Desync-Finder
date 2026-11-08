@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.25"
+APP_VERSION = "2.1.26"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -5375,8 +5375,19 @@ class TimelinePanel:
             self._refresh_points()
         kept = [p for p in self.points if self._on_model(p)]
         removed = len(self.points) - len(kept)
+        if removed == 0 and len((plan.get("segments") or [])) >= 5:
+            reference = single_line_plan(self.points, float(self.plan_duration or 0.0))
+            if reference.get("segments"):
+                self.plan = reference
+                self._refresh_points()
+                kept = [p for p in self.points if self._on_model(p)]
+                removed = len(self.points) - len(kept)
+                console_log("The model bends to follow its own points, so nothing "
+                            "was off it. Compared against one straight line "
+                            "instead.", "info")
         if removed == 0:
-            console_log("Every point already sits on the line.", "info")
+            console_log("Every point agrees with the line - nothing to remove.",
+                        "info")
             return
         if not kept:
             messagebox.showwarning("Delete off-line",

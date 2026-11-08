@@ -3,6 +3,16 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.26 / 2.1.26
+
+- **`Delete off-line points` explains itself when a dense model hides the junk.**
+  With many segments the model bends to follow its own points, so every row is
+  legitimately "on the line" and the button answered "every point already sits on
+  the line" - true, but useless. When that happens and the plan has five or more
+  segments, it now re-compares everything against **one straight line** fitted
+  through the points, says so in the log, and removes what disagrees with the
+  film's overall behaviour. With a one-segment model nothing changes.
+
 ## 3.1.25 / 2.1.25
 
 - **The dots are painted pixmaps now.** The table theme overwrites an item's

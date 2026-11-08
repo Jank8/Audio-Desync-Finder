@@ -2701,7 +2701,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.25"
+APP_VERSION = "3.1.26"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -4225,8 +4225,25 @@ class MainWindow(FluentWindow):
             self._draw()
         kept = [p for p in self.points if self._point_colour(p) == "#ff5a5f"]
         removed = len(self.points) - len(kept)
+        if removed == 0 and len((self.plan or {}).get("segments") or []) >= 5:
+            # A model with many segments bends to follow its own points, so each
+            # of them is "on the line" by construction and there is nothing to
+            # drop.  Comparing against one straight line is what shows which
+            # points actually agree with the film's overall behaviour.
+            duration = float((self.meta or {}).get("ref_duration") or 0.0)
+            reference = single_line_plan(self.points, duration)
+            if reference.get("segments"):
+                self.plan = reference
+                self._draw()
+                kept = [p for p in self.points if self._point_colour(p) == "#ff5a5f"]
+                removed = len(self.points) - len(kept)
+                self.ui_queue.put(("log", (
+                    f"The {len(reference.get('segments') or [])}-segment model "
+                    "bends to follow its own points, so nothing was off it. "
+                    "Compared against one straight line instead.")))
         if removed == 0:
-            self.ui_queue.put(("log", "Every point already sits on the line."))
+            self.ui_queue.put(("log", "Every point agrees with the line - nothing "
+                                      "to remove."))
             return
         if not kept:
             show_message("Delete off-line points",

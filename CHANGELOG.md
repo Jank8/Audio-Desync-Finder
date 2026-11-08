@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.24 / 2.1.24
+
+- **`Delete off-line points` no longer refuses when the model is empty.** It said
+  "scan the files first" whenever `self.plan` had no segments - which also
+  happens when a scan found nothing, or when the plan has not arrived yet. It now
+  falls back to a line fitted through the points themselves
+  (`single_line_plan`) and says so in the log, so the button works on any set of
+  measurements. Only an empty table still stops it, with a message that says that.
+
 ## 3.1.23 / 2.1.23
 
 - **`Delete off-line points`.** One button drops every measurement whose status

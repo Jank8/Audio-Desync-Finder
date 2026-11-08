@@ -2700,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.23"
+APP_VERSION = "3.1.24"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -4203,10 +4203,25 @@ class MainWindow(FluentWindow):
 
     def prune_points(self):
         """Drop everything that is not sitting on the fitted line."""
-        if not self.meta or not (self.plan or {}).get("segments"):
+        if not self.points:
             show_message("Delete off-line points",
-                         "Scan the files first - there is no model to compare with.")
+                         "There are no measurements yet - scan the files first.")
             return
+        if not (self.plan or {}).get("segments"):
+            # No model to compare against (the scan found nothing, or it has not
+            # finished).  A line fitted through the points themselves is still a
+            # fair reference for "which of these agree with the majority".
+            duration = float((self.meta or {}).get("ref_duration") or 0.0)
+            reference = single_line_plan(self.points, duration)
+            if not reference.get("segments"):
+                show_message("Delete off-line points",
+                             "There is no model yet and too few points to fit "
+                             "one. Scan again or delete the bad rows by hand.")
+                return
+            self.plan = reference
+            self.ui_queue.put(("log", "No model yet - comparing against a line "
+                                      "fitted through the points themselves."))
+            self._draw()
         kept = [p for p in self.points if self._point_colour(p) == "#ff5a5f"]
         removed = len(self.points) - len(kept)
         if removed == 0:

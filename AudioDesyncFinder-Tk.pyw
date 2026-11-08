@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.23"
+APP_VERSION = "2.1.24"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -5355,11 +5355,24 @@ class TimelinePanel:
 
     def prune_points(self) -> None:
         """Drop every measurement that is not sitting on the fitted line."""
-        plan = getattr(self, "plan", None) or {}
-        if not self.points or not (plan.get("segments") or []):
-            messagebox.showwarning("Delete off-line", "Scan the files first.",
+        if not self.points:
+            messagebox.showwarning("Delete off-line",
+                                   "There are no measurements yet - scan first.",
                                    parent=self.frame)
             return
+        plan = getattr(self, "plan", None) or {}
+        if not (plan.get("segments") or []):
+            reference = single_line_plan(self.points, float(self.plan_duration or 0.0))
+            if not reference.get("segments"):
+                messagebox.showwarning(
+                    "Delete off-line",
+                    "There is no model yet and too few points to fit one.",
+                    parent=self.frame)
+                return
+            self.plan = reference
+            console_log("No model yet - comparing against a line fitted through "
+                        "the points themselves.", "info")
+            self._refresh_points()
         kept = [p for p in self.points if self._on_model(p)]
         removed = len(self.points) - len(kept)
         if removed == 0:

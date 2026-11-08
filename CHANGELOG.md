@@ -3,6 +3,15 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.22 / 2.1.22
+
+- **The dot is a coloured cell now.** Emoji glyphs did not render at all in the
+  table (the theme's font has no emoji coverage), and a foreground brush is
+  overpainted by the theme. The status cell therefore gets a **background**
+  colour - red for on the fitted line, blue for off it - with a white dot in it,
+  which no stylesheet foreground can take away. Tk keeps the plain dot with its
+  row tag colours.
+
 ## 3.1.21 / 2.1.21
 
 - **The dots are visible now.** A plain `●` coloured with a brush came out blue

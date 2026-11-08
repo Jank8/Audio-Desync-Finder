@@ -2700,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.21"
+APP_VERSION = "3.1.22"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -4162,11 +4162,14 @@ class MainWindow(FluentWindow):
         for i, p in enumerate(self.points):
             source = "manual" if p.get("kind") == "manual" else (
                 "wave" if p.get("mode") == "w" else "env")
-            # an emoji dot carries its own colour, so the table theme cannot
-            # paint over it the way it does with a plain "●" + foreground brush
+            # A coloured *background* cannot be overpainted by the table theme
+            # the way a foreground brush (and emoji glyphs did not render at all)
+            # so the dot is a small coloured chip with a white dot in it.
             on_model = self._point_colour(p) == "#ff5a5f"
-            dot = QTableWidgetItem("🔴" if on_model else "🔵")
+            dot = QTableWidgetItem("●")
             dot.setTextAlignment(Qt.AlignCenter)
+            dot.setBackground(QColor("#ff5a5f" if on_model else "#2f6fd0"))
+            dot.setForeground(QColor("#ffffff"))
             dot.setToolTip("on the fitted line" if on_model
                            else "off the fitted line - background, not a measurement")
             self.table.setItem(i, 0, dot)

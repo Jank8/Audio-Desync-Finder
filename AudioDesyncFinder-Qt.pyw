@@ -96,7 +96,8 @@ import sys
 import threading
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDoubleValidator, QIcon, QIntValidator
+from PySide6.QtGui import (QColor, QDoubleValidator, QIcon, QIntValidator,
+                           QPainter, QPixmap)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog,
                                QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton,
@@ -2700,7 +2701,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.24"
+APP_VERSION = "3.1.25"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -3419,8 +3420,10 @@ class MainWindow(FluentWindow):
         self.table = TableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["●", "Time", "Offset (ms)", "Conf", "Source"])
-        self.table.setColumnWidth(0, 40)
+            ["", "Time", "Offset (ms)", "Conf", "Source"])
+        self.table.setColumnWidth(0, 30)
+        self.table.horizontalHeaderItem(0).setToolTip(
+            "red dot: on the fitted line, blue dot: off it")
         self.table.verticalHeader().hide()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(6)
@@ -4168,14 +4171,12 @@ class MainWindow(FluentWindow):
         for i, p in enumerate(self.points):
             source = "manual" if p.get("kind") == "manual" else (
                 "wave" if p.get("mode") == "w" else "env")
-            # A coloured *background* cannot be overpainted by the table theme
-            # the way a foreground brush (and emoji glyphs did not render at all)
-            # so the dot is a small coloured chip with a white dot in it.
+            # The dot is a painted pixmap, not a glyph and not a colour role:
+            # the table theme overrides both the foreground and the background
+            # of an item, but it does not touch a decoration icon.
             on_model = self._point_colour(p) == "#ff5a5f"
-            dot = QTableWidgetItem("●")
-            dot.setTextAlignment(Qt.AlignCenter)
-            dot.setBackground(QColor("#ff5a5f" if on_model else "#2f6fd0"))
-            dot.setForeground(QColor("#ffffff"))
+            dot = QTableWidgetItem("")
+            dot.setIcon(self._dot_icon(on_model))
             dot.setToolTip("on the fitted line" if on_model
                            else "off the fitted line - background, not a measurement")
             self.table.setItem(i, 0, dot)
@@ -4273,6 +4274,26 @@ class MainWindow(FluentWindow):
             if seg["t_start"] - 1.0 <= t <= seg["t_end"] + 1.0:
                 return seg
         return None
+
+    def _dot_icon(self, on_model: bool):
+        """A small painted dot: red when on the fitted line, blue when not."""
+        key = "_dot_red" if on_model else "_dot_blue"
+        cached = getattr(self, key, None)
+        if cached is not None:
+            return cached
+        pixmap = QPixmap(14, 14)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setBrush(QColor("#ff5a5f" if on_model else "#2f6fd0"))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(2, 2, 10, 10)
+        finally:
+            painter.end()
+        icon = QIcon(pixmap)
+        setattr(self, key, icon)
+        return icon
 
     def _point_colour(self, point):
         """Red when the measurement sits on the model, accent when it does not."""

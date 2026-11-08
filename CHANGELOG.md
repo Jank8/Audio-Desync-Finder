@@ -3,6 +3,14 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.25 / 2.1.25
+
+- **The dots are painted pixmaps now.** The table theme overwrites an item's
+  foreground *and* its background, so a glyph and a coloured cell both came out
+  invisible or plain. The status is a 14x14 circle drawn with QPainter and set as
+  the item's icon: red for on the fitted line, blue for off it, which the theme
+  does not touch at all. The column carries a tooltip saying so.
+
 ## 3.1.24 / 2.1.24
 
 - **`Delete off-line points` no longer refuses when the model is empty.** It said

@@ -3,6 +3,18 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.19 / 2.1.19
+
+- **`Anchors…`: measure only the start and the end.** One long window near each
+  end, and the two offsets tell the whole story: the same value means the file
+  only shifted (same edit, same speed), a different one is drift, and the
+  difference over a known distance is the tempo. A constant 421 ms measures
+  `+420.6 / +420.8 ms -> only a shift`; a deliberately drifting file measures
+  `delta 8000 ms -> 36.4 ms/s`. The dialog can use the result as the plan - one
+  line, no cuts, no inserted silence - and Tk has the same button behind a
+  confirmation.
+- `anchor_points()` is the engine behind it, shared by both builds.
+
 ## 3.1.18 / 2.1.18
 
 - **A pad that a later skip undoes is removed.** Two versions of one film rarely

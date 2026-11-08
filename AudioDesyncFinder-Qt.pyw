@@ -2179,6 +2179,60 @@ def single_line_plan(points, duration: float):
             "single_line": True}
 
 
+def anchor_points(a, b, t_start: float, t_end: float, window: float = 120.0,
+                  mode: str = "auto", sos=None, should_stop=None):
+    """
+    Measure one long window near the start and one near the end.
+
+    Two good anchors answer the question the chart cannot: did the file only
+    shift, or does it run at a different speed?  A constant offset means the two
+    are the same edit and nothing else happened; a difference between the two
+    anchors is drift, and drift over a known distance is a tempo.
+    """
+    info = {"start_offset": None, "end_offset": None, "window": float(window),
+            "t_start": float(t_start), "t_end": float(t_end), "error": None}
+    first = measure_pair(a, b, float(t_start), float(window), sos, mode=mode)
+    if should_stop and should_stop():
+        return None, info
+    if first is None:
+        info["error"] = "nothing to measure at the start"
+        return None, info
+    second = measure_pair(a, b, float(t_end), float(window), sos, mode=mode)
+    if second is None:
+        info["error"] = "nothing to measure at the end"
+        return None, info
+    centre_first = float(t_start) + float(window) / 2.0
+    centre_second = float(t_end) + float(window) / 2.0
+    span = centre_second - centre_first
+    if span < 60.0:
+        info["error"] = "the two anchors are closer than a minute"
+        return None, info
+    delta = float(second["offset"]) - float(first["offset"])
+    slope = delta / span
+    intercept = float(first["offset"]) - slope * centre_first
+    atempo = max(0.5, min(2.0, 1.0 + slope / 1000.0))
+    info.update({"start_offset": round(float(first["offset"]), 2),
+                 "end_offset": round(float(second["offset"]), 2),
+                 "delta": round(delta, 2),
+                 "span": round(span, 2),
+                 "drift": round(slope, 4),
+                 "atempo": round(atempo, 8),
+                 "start_conf": float(first.get("conf") or 0.0),
+                 "end_conf": float(second.get("conf") or 0.0)})
+    plan = {"segments": [{"t_start": 0.0, "t_end": float(max(span + centre_first, 1.0)),
+                          "offset": round(intercept, 2),
+                          "slope": round(slope, 4),
+                          "atempo": round(atempo, 8),
+                          "n": 2, "rms": 0.0}],
+            "jumps": [],
+            "initial_offset": round(intercept, 2),
+            "duration": float(max(span + centre_first, 1.0)),
+            "warnings": [],
+            "single_line": True,
+            "anchored": True}
+    return plan, info
+
+
 def model_quality(plan) -> str:
     """
     One plain sentence about how well the points sit on the fitted lines.
@@ -2646,7 +2700,7 @@ def export_plan(plan: dict, target_path: str, out_path: str,
 # ---- end engine ----
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "3.1.18"
+APP_VERSION = "3.1.19"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 LIGHT = False
 
@@ -2840,6 +2894,103 @@ class JumpSlider(QSlider):
             return
         self.setValue(value)
         self.clickedAt.emit(value)
+
+
+class AnchorDialog(QDialog):
+    """
+    Measure one long window near the start and one near the end.
+
+    The answer is the whole story of a file in two numbers: the same offset at
+    both ends means it only shifted, a different one means it runs at another
+    speed, and the difference over a known distance is exactly that tempo.
+    """
+
+    def __init__(self, parent, ref_path, tgt_path, duration, apply_cb):
+        super().__init__(parent)
+        self.setWindowTitle("Check start and end")
+        self.resize(560, 300)
+        self.ref_path = ref_path
+        self.tgt_path = tgt_path
+        self.duration = max(1.0, float(duration or 1.0))
+        self.apply_cb = apply_cb
+        self._plan = None
+
+        layout = QVBoxLayout(self)
+        hint = QLabel("One window near the start, one near the end. A constant "
+                      "offset means the file only shifted; a difference is drift, "
+                      "and drift over a known distance is a tempo.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Start at"))
+        self.edit_start = QLineEdit(format_timecode(self.duration * 0.05))
+        self.edit_start.setFixedWidth(90)
+        row.addWidget(self.edit_start)
+        row.addWidget(QLabel("End at"))
+        self.edit_end = QLineEdit(format_timecode(self.duration * 0.95))
+        self.edit_end.setFixedWidth(90)
+        row.addWidget(self.edit_end)
+        row.addWidget(QLabel("Window (s)"))
+        self.edit_window = QLineEdit("120")
+        self.edit_window.setFixedWidth(60)
+        row.addWidget(self.edit_window)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.result = QLabel("")
+        self.result.setWordWrap(True)
+        self.result.setStyleSheet("font: 10pt 'Consolas'")
+        layout.addWidget(self.result)
+
+        buttons = QHBoxLayout()
+        self.btn_measure = QPushButton("Measure")
+        self.btn_measure.clicked.connect(self._measure)
+        buttons.addWidget(self.btn_measure)
+        buttons.addStretch(1)
+        self.btn_apply = QPushButton("Use as plan")
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.clicked.connect(self._apply)
+        buttons.addWidget(self.btn_apply)
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+    def _measure(self):
+        start = parse_timecode(self.edit_start.text())
+        end = parse_timecode(self.edit_end.text())
+        window = parse_timecode(self.edit_window.text()) or 120.0
+        if start is None or end is None:
+            self.result.setText("Type the times as 2:34 or 1:07:15.")
+            return
+        try:
+            ref, tgt, _meta = decode_pair(self.ref_path, self.tgt_path)
+        except Exception as error:              # noqa: BLE001 - shown to the user
+            self.result.setText(f"Could not decode the files: {error}")
+            return
+        plan, info = anchor_points(ref, tgt, start, end, window=window)
+        if plan is None:
+            self.result.setText(f"Nothing to measure: {info.get('error')}")
+            return
+        self._plan = plan
+        self.btn_apply.setEnabled(True)
+        drift = info["drift"]
+        verdict = ("only a shift - same edit, same speed"
+                   if abs(info["delta"]) < 40.0 else
+                   f"drift {drift:+.3f} ms/s, atempo {info['atempo']:.6f}")
+        self.result.setText(
+            f"start {info['t_start']:.0f} s: {info['start_offset']:+.1f} ms "
+            f"(conf {info['start_conf']:.1f})\n"
+            f"end   {info['t_end']:.0f} s: {info['end_offset']:+.1f} ms "
+            f"(conf {info['end_conf']:.1f})\n"
+            f"difference {info['delta']:+.1f} ms over {info['span']:.0f} s "
+            f"-> {verdict}")
+
+    def _apply(self):
+        if self._plan is not None:
+            self.apply_cb(self._plan)
+            self.accept()
 
 
 class PreviewDialog(QDialog):
@@ -3297,6 +3448,12 @@ class MainWindow(FluentWindow):
         self.btn_del = PushButton("Delete selected point")
         self.btn_del.clicked.connect(self.delete_point)
         bar.addWidget(self.btn_del)
+        self.btn_anchors = PushButton("Anchors…")
+        self.btn_anchors.setToolTip(
+            "Measure the start and the end only: says whether the file shifted "
+            "or really drifts")
+        self.btn_anchors.clicked.connect(self.check_anchors)
+        bar.addWidget(self.btn_anchors)
         self.btn_play_here = PushButton("▶ Play from here")
         self.btn_play_here.setToolTip(
             "Open the preview at the selected measurement")
@@ -3706,6 +3863,26 @@ class MainWindow(FluentWindow):
             return
         x0, x1 = self.ax.get_xlim()
         self._open_preview_at(0.5 * (float(x0) + float(x1)))
+
+    def check_anchors(self):
+        if not (self.ref_path and self.tgt_path and self.meta):
+            show_message("Anchors", "Pick both files and let them load first.")
+            return
+        ref_path, tgt_path = self._ordered_paths()
+        dialog = AnchorDialog(self, ref_path, tgt_path,
+                              self.meta["ref_duration"], self._use_anchor_plan)
+        dialog.exec()
+
+    def _use_anchor_plan(self, plan):
+        self.plan = plan
+        self.model_view.setPlainText("\n".join(plan_lines(plan)[:10]))
+        notice = mismatch_text(plan)
+        self.mismatch_label.setText(notice)
+        self.mismatch_label.setVisible(bool(notice))
+        self._update_summary()
+        self._draw()
+        self.btn_export.setEnabled(bool(plan.get("segments")))
+        self.status.setText("Anchored plan - start and end only")
 
     def _open_preview_at(self, centre: float):
         if not _HAVE_PLAYER:

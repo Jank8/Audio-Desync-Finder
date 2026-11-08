@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.18"
+APP_VERSION = "2.1.19"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3996,6 +3996,60 @@ def single_line_plan(points, duration: float):
             "single_line": True}
 
 
+def anchor_points(a, b, t_start: float, t_end: float, window: float = 120.0,
+                  mode: str = "auto", sos=None, should_stop=None):
+    """
+    Measure one long window near the start and one near the end.
+
+    Two good anchors answer the question the chart cannot: did the file only
+    shift, or does it run at a different speed?  A constant offset means the two
+    are the same edit and nothing else happened; a difference between the two
+    anchors is drift, and drift over a known distance is a tempo.
+    """
+    info = {"start_offset": None, "end_offset": None, "window": float(window),
+            "t_start": float(t_start), "t_end": float(t_end), "error": None}
+    first = measure_pair(a, b, float(t_start), float(window), sos, mode=mode)
+    if should_stop and should_stop():
+        return None, info
+    if first is None:
+        info["error"] = "nothing to measure at the start"
+        return None, info
+    second = measure_pair(a, b, float(t_end), float(window), sos, mode=mode)
+    if second is None:
+        info["error"] = "nothing to measure at the end"
+        return None, info
+    centre_first = float(t_start) + float(window) / 2.0
+    centre_second = float(t_end) + float(window) / 2.0
+    span = centre_second - centre_first
+    if span < 60.0:
+        info["error"] = "the two anchors are closer than a minute"
+        return None, info
+    delta = float(second["offset"]) - float(first["offset"])
+    slope = delta / span
+    intercept = float(first["offset"]) - slope * centre_first
+    atempo = max(0.5, min(2.0, 1.0 + slope / 1000.0))
+    info.update({"start_offset": round(float(first["offset"]), 2),
+                 "end_offset": round(float(second["offset"]), 2),
+                 "delta": round(delta, 2),
+                 "span": round(span, 2),
+                 "drift": round(slope, 4),
+                 "atempo": round(atempo, 8),
+                 "start_conf": float(first.get("conf") or 0.0),
+                 "end_conf": float(second.get("conf") or 0.0)})
+    plan = {"segments": [{"t_start": 0.0, "t_end": float(max(span + centre_first, 1.0)),
+                          "offset": round(intercept, 2),
+                          "slope": round(slope, 4),
+                          "atempo": round(atempo, 8),
+                          "n": 2, "rms": 0.0}],
+            "jumps": [],
+            "initial_offset": round(intercept, 2),
+            "duration": float(max(span + centre_first, 1.0)),
+            "warnings": [],
+            "single_line": True,
+            "anchored": True}
+    return plan, info
+
+
 def model_quality(plan) -> str:
     """
     One plain sentence about how well the points sit on the fitted lines.
@@ -4755,6 +4809,13 @@ class TimelinePanel:
                                      activebackground="#3a3a3a",
                                      activeforeground="#ffffff", padx=12, pady=8)
         self.btn_preview.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.btn_anchors = tk.Button(footer, text="Anchors", command=self.check_anchors,
+                                     bg="#333333", fg="#ffffff", relief=tk.FLAT,
+                                     font=("Segoe UI", 9), cursor="hand2",
+                                     activebackground="#3a3a3a",
+                                     activeforeground="#ffffff", padx=12, pady=8)
+        self.btn_anchors.pack(side=tk.LEFT, padx=(0, 6))
         self.btn_export = tk.Button(footer, text="⬇ Export corrected audio…",
                                     command=self.export_audio, bg="#1a3a5a",
                                     fg="#ffffff", relief=tk.FLAT, state=tk.DISABLED,
@@ -5319,6 +5380,56 @@ class TimelinePanel:
                                min_conf=self._conf(),
                                allow_drift=getattr(self, "allow_drift", True))
         self._refresh_plan()
+
+    def check_anchors(self) -> None:
+        """
+        Measure the start and the end only, and offer the result as the plan.
+
+        Two good anchors say whether the file shifted or drifts; a difference
+        between them is a tempo, and the line through them is a plan without any
+        cut or inserted silence.
+        """
+        if not (self.ref_path and self.target_path and self.meta):
+            messagebox.showwarning("Anchors", "Pick both files first.",
+                                   parent=self.frame)
+            return
+        duration = float(self.plan_duration or self.meta.get("ref_duration") or 0.0)
+        if duration < 120.0:
+            messagebox.showwarning("Anchors", "The files are too short for this.",
+                                   parent=self.frame)
+            return
+        self._post("status", "Measuring the start and the end…")
+        try:
+            ref, tgt, _meta = decode_pair(
+                self.ref_path, self.target_path,
+                workers=int(self._num(self.var_cores, _cores_default_value(), 1, 64)))
+        except Exception as error:            # noqa: BLE001 - shown to the user
+            messagebox.showerror("Anchors", f"Could not decode: {error}",
+                                 parent=self.frame)
+            return
+        plan, info = anchor_points(ref, tgt, duration * 0.05, duration * 0.95,
+                                   window=min(120.0, max(20.0, duration * 0.05)),
+                                   mode=self._mode())
+        if plan is None:
+            messagebox.showwarning("Anchors", f"Nothing to measure: {info.get('error')}",
+                                   parent=self.frame)
+            self._post("status", "Ready")
+            return
+        verdict = ("only a shift - same edit, same speed"
+                   if abs(info["delta"]) < 40.0
+                   else f"drift {info['drift']:+.3f} ms/s (atempo {info['atempo']:.6f})")
+        message = (f"start {info['t_start']:.0f} s: {info['start_offset']:+.1f} ms\n"
+                   f"end   {info['t_end']:.0f} s: {info['end_offset']:+.1f} ms\n"
+                   f"difference {info['delta']:+.1f} ms over {info['span']:.0f} s\n"
+                   f"-> {verdict}\n\nUse this as the plan?")
+        console_log(message.replace("\n", " "), "ok")
+        if messagebox.askyesno("Anchors", message, parent=self.frame):
+            self.plan = plan
+            self._post("plan", plan)
+            self._refresh_plan()
+            self._post("status", "Anchored plan - start and end only")
+        else:
+            self._post("status", "Ready")
 
     def preview(self) -> None:
         """Render a short window and hand it to the system player."""

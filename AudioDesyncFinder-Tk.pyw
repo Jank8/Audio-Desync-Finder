@@ -76,7 +76,7 @@ except ImportError:
     sv_ttk = None
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "2.1.17"
+APP_VERSION = "2.1.18"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 _timeline_panel = None   # created when the files are loaded
 
@@ -3884,6 +3884,118 @@ def build_plan(points, duration: float, min_conf: float = 2.0,
     }
 
 
+def collapse_cancelling_jumps(plan, tol_ms: float = 250.0,
+                              max_span_s: float = 1800.0):
+    """
+    Remove a pad that a later skip undoes.
+
+    Two versions of the same film rarely differ in a way that needs a hole: when
+    the plan says "insert 7.5 s here" at 2:34 and "skip 7.6 s" at 2:42, the two
+    cancel out and the middle is back where it started - but the listener still
+    hears seven seconds of silence and then a jump. Such a pair is measurement
+    noise, not editing, so the segments between them are folded back into one
+    line and both jumps disappear.
+
+    A pair only qualifies when the two deltas nearly cancel and they are close
+    enough together for the audio between them to be one continuous stretch.
+    """
+    segments = plan.get("segments") or []
+    jumps = plan.get("jumps") or []
+    if len(segments) < 3 or len(jumps) < 2:
+        return plan
+    used = [False] * len(jumps)
+    absorbed = set()
+    removed = 0
+    for i in range(len(jumps)):
+        if used[i]:
+            continue
+        for j in range(i + 1, len(jumps)):
+            if used[j]:
+                continue
+            if abs(float(jumps[i]["delta"]) + float(jumps[j]["delta"])) > tol_ms:
+                continue
+            span = float(jumps[j]["t"]) - float(jumps[i]["t"])
+            if span < 0 or span > max_span_s:
+                continue
+            used[i] = used[j] = True
+            for k in range(i + 1, j + 1):
+                if k < len(segments):
+                    absorbed.add(k)
+            removed += 1
+            break
+    if not absorbed:
+        return plan
+    kept = []
+    for index, segment in enumerate(segments):
+        if index in absorbed:
+            kept[-1]["t_end"] = segment["t_end"]
+            kept[-1]["n"] = int(kept[-1].get("n") or 0) + int(segment.get("n") or 0)
+            kept[-1]["rms"] = round(max(float(kept[-1].get("rms") or 0.0),
+                                        float(segment.get("rms") or 0.0)), 2)
+            continue
+        kept.append(dict(segment))
+    out = dict(plan)
+    out["segments"] = kept
+    out["jumps"] = []
+    for prev, cur in zip(kept, kept[1:]):
+        boundary = cur["t_start"]
+        at = float(prev["offset"]) + float(prev["slope"]) * (
+            boundary - float(prev["t_start"]))
+        delta = float(cur["offset"]) - at
+        if abs(delta) < 40.0:
+            continue
+        out["jumps"].append({"t": boundary, "delta": round(delta, 2),
+                             "mode": "pad" if delta < 0 else "skip"})
+    out["initial_offset"] = kept[0]["offset"] if kept else 0.0
+    out["collapsed_pairs"] = int(plan.get("collapsed_pairs") or 0) + removed
+    return out
+
+
+def single_line_plan(points, duration: float):
+    """
+    One offset and one drift for the whole film - no cuts, no holes at all.
+
+    This is what to use when the two releases are the same edit but one was
+    sped up (PAL), and it is also the safe answer when the break detector keeps
+    inventing edits: audio can then only walk out of sync gradually, never jump.
+    """
+    usable = [p for p in points if float(p.get("conf") or 0.0) > 0.0]
+    if len(usable) < 2:
+        return {"segments": [], "jumps": [], "initial_offset": 0.0,
+                "duration": duration, "warnings": ["Too few measurements."],
+                "single_line": True}
+    times = np.array([float(p["t"]) for p in usable], dtype=np.float64)
+    offsets = np.array([float(p["offset"]) for p in usable], dtype=np.float64)
+    weights = np.array([max(1.0, float(p.get("conf") or 1.0)) for p in usable])
+    slope = 0.0
+    if len(usable) >= 5 and float(times.max() - times.min()) > 60.0:
+        try:
+            slope = float(np.median([
+                (offsets[j] - offsets[i]) / (times[j] - times[i])
+                for i in range(len(usable) - 1)
+                for j in range(i + 1, min(i + 6, len(usable)))
+                if times[j] > times[i]]))
+        except Exception:
+            slope = 0.0
+        if abs(slope) > 100.0:
+            slope = 0.0
+    intercept = float(np.median(offsets - slope * times))
+    residual = offsets - (intercept + slope * times)
+    rms = float(np.sqrt(np.mean(residual ** 2)))
+    atempo = 1.0 + slope / 1000.0
+    atempo = max(0.5, min(2.0, atempo))
+    return {"segments": [{"t_start": 0.0, "t_end": float(duration),
+                          "offset": round(intercept, 2),
+                          "slope": round(slope, 4),
+                          "atempo": round(atempo, 8),
+                          "n": len(usable), "rms": round(rms, 2)}],
+            "jumps": [],
+            "initial_offset": round(intercept, 2),
+            "duration": float(duration),
+            "warnings": [],
+            "single_line": True}
+
+
 def model_quality(plan) -> str:
     """
     One plain sentence about how well the points sit on the fitted lines.
@@ -4433,6 +4545,13 @@ class TimelinePanel:
         signal_menu.pack(side=tk.LEFT, padx=(0, 12))
 
         # tempo: only fitted when the framerates differ, unless forced
+        self.var_single = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            row, text="Single line", variable=self.var_single, bg=BG_PANEL,
+            fg=FG_DIM, selectcolor=BG_INPUT, bd=0, highlightthickness=0,
+            activebackground=BG_PANEL, activeforeground="#ffffff",
+            font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 12))
+
         self.var_tempo = tk.BooleanVar(value=False)
         tk.Checkbutton(
             row, text="Tempo", variable=self.var_tempo, bg=BG_PANEL,
@@ -5003,12 +5122,22 @@ class TimelinePanel:
                                   min_conf=self._conf(), slope_hint=hint,
                                   allow_drift=getattr(self, "allow_drift", True))
 
+        if self.var_single.get():
+            plan = single_line_plan(points, self.plan_duration)
+            console_log("Single line: one offset and one drift, nothing is cut "
+                        "or padded.", "info")
+        else:
+            plan = collapse_cancelling_jumps(plan)
+            if plan.get("collapsed_pairs"):
+                console_log(f"Removed {plan['collapsed_pairs']} cut(s) that a "
+                            "later cut undid: the audio in between is continuous "
+                            "again.", "info")
+        self._post("plan", plan)
         for line in plan_report_lines(plan):
             console_log(line, "ok")
         quality = model_quality(plan)
         if quality:
             console_log(quality, "warn" if "weak" in quality else "info")
-        self._post("plan", plan)
         if not self.stop_event.is_set():
             save_result(result_key_value, points, plan)
         self._post("status", "Measuring done")

@@ -3,6 +3,21 @@
 Every entry is a release of both builds: the Qt one is `3.0.x`, the Tk one
 `2.0.x`. The `.x` is the same number in both.
 
+## 3.1.18 / 2.1.18
+
+- **A pad that a later skip undoes is removed.** Two versions of one film rarely
+  need a hole: when the plan inserted 7.5 s at 2:34 and skipped 7.6 s at 2:42,
+  the pair cancels out, but the listener heard seven seconds of silence followed
+  by a jump. `collapse_cancelling_jumps()` folds the segments between such a
+  pair back into one line and drops both jumps; a pair only qualifies when the
+  deltas cancel within 250 ms and are at most 30 minutes apart, so a genuine
+  missing scene stays.
+- **`Single line` checkbox.** One offset and one drift for the whole film, built
+  from all measurements with a Theil-Sen slope: no cuts, no silence inserted
+  anywhere. Audio can then only walk out of sync gradually instead of jumping,
+  which is the right answer both for a pure PAL speed-up and for material where
+  the break detector keeps inventing edits.
+
 ## 3.1.17 / 2.1.17
 
 - **A 24 -> 25 pair is recognised as a speed change.** `speed_hint()` compared

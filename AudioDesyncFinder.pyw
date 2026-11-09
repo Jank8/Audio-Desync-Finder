@@ -123,7 +123,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.6"
+APP_VERSION = "4.0.7"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1224,6 +1224,14 @@ def diagnose_jump(ref, tgt, plan, index: int, span: float = 900.0) -> list:
         nearest = min(gaps, key=lambda g: abs(g[0] - boundary))
         notes.append(f"  {label}: {len(gaps)} black insert(s), closest at "
                      f"{format_timecode(nearest[0])} lasting {nearest[1] / 1000:.1f} s")
+    zones = [z for z in transition_zones(ref, tgt)
+             if boundary - span <= z[0] <= boundary + span]
+    if zones:
+        nearest = min(zones, key=lambda z: abs(z[0] - boundary))
+        notes.append(f"  a fade-to-black zone starts at "
+                     f"{format_timecode(nearest[0])} and lasts "
+                     f"{nearest[1] / 1000:.1f} s - that is what a hard cut in the "
+                     f"reference became")
     # the same gap in both files: their difference is the jump
     ref_gaps = [g for g in black_gaps(ref) if boundary - span <= g[0] <= boundary + span]
     tgt_gaps = [g for g in black_gaps(tgt) if boundary - span <= g[0] <= boundary + span]
@@ -1306,6 +1314,55 @@ def align_gaps(ref_gaps, tgt_gaps, tolerance: float = 3.0,
         events.append({"t": round(pairs[index][0][0], 2),
                        "delta": round(delta, 1), "support": window})
     return pairs, events
+
+
+def transition_zones(ref, tgt, frame_ms: float = 100.0, drop_db: float = 12.0,
+                     min_ms: float = 600.0, pad_ms: float = 300.0):
+    """
+    Places where the target fades out and back in while the reference cuts.
+
+    A lektor release often replaces a hard cut with a fade to black and a fade
+    back: the audio never reaches digital zero, it just drops a dozen decibels and
+    comes back.  Looking for digital silence alone therefore finds only the two
+    darkest seconds and the cut misses the fades, which is what makes it audible.
+    These zones are found against the target's own level, and are widened a little
+    at both ends so the fades are removed with the black.
+
+    Returns [(start_seconds, length_ms)].
+    """
+    hop = int(SCAN_SR * frame_ms / 1000.0)
+    frames = min(len(ref), len(tgt)) // hop
+    if frames < 10:
+        return []
+    a = np.asarray(ref[:frames * hop], dtype=np.float32).reshape(frames, hop)
+    b = np.asarray(tgt[:frames * hop], dtype=np.float32).reshape(frames, hop)
+    level_a = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(a * a, axis=1)), 1e-6) / 32768.0)
+    level_b = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(b * b, axis=1)), 1e-6) / 32768.0)
+    reference_level = float(np.median(level_b)) if len(level_b) else -20.0
+    dip = (level_b < reference_level - drop_db) & (level_a > level_b + 6.0)
+    zones = []
+    start = None
+    for index, flag in enumerate(dip):
+        if flag and start is None:
+            start = index
+        elif not flag and start is not None:
+            length = (index - start) * frame_ms
+            if length >= min_ms:
+                zones.append([start * frame_ms / 1000.0, length])
+            start = None
+    merged = []
+    for zone in zones:
+        if merged and zone[0] - (merged[-1][0] + merged[-1][1] / 1000.0) <= 1.0:
+            end = max(merged[-1][0] + merged[-1][1] / 1000.0, zone[0] + zone[1] / 1000.0)
+            merged[-1] = [merged[-1][0], (end - merged[-1][0]) * 1000.0]
+        else:
+            merged.append(list(zone))
+    padded = []
+    for start_s, length in merged:
+        begin = max(0.0, start_s - pad_ms / 1000.0)
+        end = start_s + length / 1000.0 + pad_ms / 1000.0
+        padded.append((begin, (end - begin) * 1000.0))
+    return padded
 
 
 def target_holes(ref, tgt, min_ms: float = 200.0, quiet_db: float = -90.0,

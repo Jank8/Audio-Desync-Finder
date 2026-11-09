@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.0.7
+
+- **fade-to-black transitions are measured, not guessed.** Looking for digital
+  silence missed them: a lektor release replaces a hard cut with a fade out, a
+  moment of black and a fade back, and the audio never reaches zero. `transition_zones()`
+  finds where the target drops a dozen decibels below its own level while the
+  reference keeps playing, widens the zone by 300 ms at both ends and reports it
+  next to every jump
+- on the Return of the King pair it reports `a fade-to-black zone starts at
+  2:07:38 and lasts 2.8 s` while the model's jump there is +4830 ms - so 2.8 s of
+  that jump is the dissolved transition and the remaining ~2 s is a genuine edit
+  difference between the two cuts. The app now says both numbers instead of
+  silently cutting 4.8 s
+
 ## 4.0.6
 
 - **the decoding is now 3.1.x verbatim.** PCM on stdout, FFmpeg's progress on

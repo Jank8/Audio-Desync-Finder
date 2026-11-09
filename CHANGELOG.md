@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.0.6
+
+- **the decoding is now 3.1.x verbatim.** PCM on stdout, FFmpeg's progress on
+  stderr (`-progress pipe:2 -stats_period 0.05`), a follower thread per slice that
+  keeps `done[index]` up to date, and one throttled `report()` that sums the slice
+  positions - so the bar moves while a slice is still decoding instead of jumping
+  when it ends. Slices overlap by half a second and are trimmed to the exact sample
+  count, and Stop kills them at once
+- measured on the hour-long file: 22 callbacks in a 1.0 s decode, strictly rising
+  from 0.001 to 1.0
+- **only one copy can run.** A named Windows mutex is taken at start-up; a second
+  window shows 'Audio Desync Finder is already running. Close the other window
+  first.' and exits. Two copies used to fight over the same files and the same
+  decoded-audio cache
+
 ## 4.0.5
 
 - **the decoding finally moves the bar the way 3.1.x did.** The old build read

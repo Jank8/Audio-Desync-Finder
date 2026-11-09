@@ -123,7 +123,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.5"
+APP_VERSION = "4.0.6"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -233,48 +233,227 @@ def _track_key(path):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _decode_chunk(path: str, start: float, length: float, on_progress=None):
-    """
-    One slice of the file, decoded on its own, reporting how far it has got.
+_ffmpeg_procs = []
+_instance_handle = None
 
-    FFmpeg writes its progress as `out_time_us=` lines, so a slice that takes ten
-    seconds can move the bar the whole time instead of jumping when it ends.  The
-    PCM goes to a temporary file because stdout is taken by the progress stream.
+
+def get_startupinfo():
+    """Keep the console window of every ffmpeg out of sight on Windows."""
+    if os.name == "nt":
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = subprocess.SW_HIDE
+        return info
+    return None
+
+
+def acquire_single_instance(name: str = "AudioDesyncFinder"):
     """
-    out_path = os.path.join(tempfile.gettempdir(),
-                            f"ads2slice-{os.getpid()}-{threading.get_ident()}-"
-                            f"{int(start * 1000)}.raw")
-    cmd = [_ffmpeg(), "-v", "error", "-nostdin", "-progress", "pipe:1", "-nostats"]
-    if start > 0.0:
-        cmd += ["-ss", f"{start:.3f}"]
-    cmd += ["-i", path, "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR)]
-    if length > 0.0:
-        cmd += ["-t", f"{length:.3f}"]
-    cmd += ["-f", "s16le", out_path]
-    flags = 0x08000000 if os.name == "nt" else 0
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, creationflags=flags)
+    Hold a named Windows mutex for the life of the process.
+
+    Returns the handle (keep it alive) or None when another instance already owns
+    the name.  A second copy fights the first one for the same files and the same
+    decoded-audio cache, and none of the UI is built for two.
+    """
+    if os.name != "nt":
+        return True
     try:
-        for line in process.stdout:
-            line = line.strip()
-            if line.startswith("out_time_us=") and on_progress is not None:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool,
+                                          ctypes.c_wchar_p]
+        handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
+        if not handle:
+            return True                  # cannot tell - do not block the app
+        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            return None
+        return handle
+    except Exception:
+        return True
+
+
+def show_message(title: str, text: str) -> None:
+    """A message box for the moments before (or without) a GUI toolkit."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x40)
+    except Exception:
+        pass
+
+
+def _decode_parallel(path: str, total: float, workers: int,
+                     on_fraction=None, should_stop=None):
+    """
+    Decode the track in *workers* slices at once and concatenate the PCM.
+
+    FFmpeg decodes a single stream on one core, so splitting the timeline is the
+    only way to use the machine.  Each slice is decoded with half a second of
+    overlap and trimmed to the exact sample count, so the joins are seamless.
+
+    Every slice follows its own FFmpeg position (-progress on stderr, stdout
+    carries the PCM): equal slices started together all finish at the same
+    moment, so counting finished slices leaves the bar frozen until the very end.
+    """
+    chunk = total / workers
+    parts = [None] * workers
+    done = [0.0] * workers          # seconds of audio decoded inside each slice
+    lock = threading.Lock()
+    reported = [0.0]
+    last_tick = [0.0]
+
+    def report(force: bool = False) -> None:
+        """Overall fraction from the slice positions, at most 30 times a second."""
+        if on_fraction is None:
+            return
+        now = time.time()
+        with lock:
+            frac = min(1.0, sum(done) / total) if total > 0 else 0.0
+            if not force and (frac - reported[0] < 0.0001
+                              or now - last_tick[0] < 0.03):
+                return
+            reported[0] = frac
+            last_tick[0] = now
+        on_fraction(frac)
+
+    def run(index: int) -> None:
+        start = index * chunk
+        length = chunk + (0.5 if index < workers - 1 else 0.0)
+        cmd = [_ffmpeg(), "-v", "error", "-nostdin", "-nostats",
+               "-stats_period", "0.05", "-progress", "pipe:2",
+               "-ss", f"{start:.3f}", "-i", path, "-t", f"{length:.3f}",
+               "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR),
+               "-f", "s16le", "-"]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   stdin=subprocess.DEVNULL,
+                                   startupinfo=get_startupinfo())
+        _ffmpeg_procs.append(process)
+
+        def follow() -> None:
+            """Keep this slice's position in *done* while it decodes."""
+            for raw in iter(process.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("out_time_us="):
+                    continue
                 try:
-                    on_progress(float(line.split("=", 1)[1]) / 1e6)
+                    seconds = int(line.split("=", 1)[1]) / 1_000_000.0
                 except ValueError:
                     continue
-    finally:
-        process.stdout.close()
-        process.wait()
-    if process.returncode != 0 or not os.path.exists(out_path):
-        if os.path.exists(out_path):
-            os.remove(out_path)
-        return None
-    data = np.fromfile(out_path, dtype=np.int16)
+                with lock:
+                    done[index] = max(done[index], min(seconds, length))
+                report()
+
+        follower = threading.Thread(target=follow, daemon=True)
+        follower.start()
+        try:
+            data = process.stdout.read()
+        finally:
+            process.wait()
+            follower.join(timeout=10.0)
+            try:
+                _ffmpeg_procs.remove(process)
+            except ValueError:
+                pass
+            try:
+                process.stdout.close()
+                process.stderr.close()
+            except OSError:
+                pass
+        piece = np.frombuffer(data, dtype=np.int16)
+        if index < workers - 1:
+            piece = piece[:int(round(chunk * SCAN_SR))]
+        parts[index] = piece
+        with lock:
+            done[index] = length
+        report(force=True)
+
+    stop_watch = threading.Event()
+    cancelled = threading.Event()
+
+    def watch() -> None:
+        """Kill the running slices as soon as the caller asks to stop."""
+        while not stop_watch.wait(0.2):
+            if should_stop is not None and should_stop():
+                cancelled.set()
+                for process in list(_ffmpeg_procs):
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     try:
-        os.remove(out_path)
-    except OSError:
-        pass
-    return data
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending = [pool.submit(run, index) for index in range(workers)]
+            for future in as_completed(pending):
+                if cancelled.is_set() or (should_stop is not None and should_stop()):
+                    for process in list(_ffmpeg_procs):
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                    raise RuntimeError("Cancelled by the user")
+                future.result()
+    finally:
+        stop_watch.set()
+        watcher.join(timeout=1.0)
+
+    usable = [piece for piece in parts if piece is not None and len(piece)]
+    return np.concatenate(usable) if usable else np.zeros(0, dtype=np.int16)
+
+
+def _decode_sequential(path: str, total: float, on_fraction=None,
+                       should_stop=None):
+    """One ffmpeg for the whole file, with its own progress on stderr."""
+    cmd = [_ffmpeg(), "-v", "error", "-nostdin", "-nostats",
+           "-stats_period", "0.05", "-progress", "pipe:2",
+           "-i", path, "-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR),
+           "-f", "s16le", "-"]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE,
+                               stdin=subprocess.DEVNULL,
+                               startupinfo=get_startupinfo())
+    _ffmpeg_procs.append(process)
+    reported = [0.0]
+
+    def follow() -> None:
+        for raw in iter(process.stderr.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("out_time_us="):
+                continue
+            try:
+                seconds = int(line.split("=", 1)[1]) / 1_000_000.0
+            except ValueError:
+                continue
+            if on_fraction and total > 0:
+                frac = min(1.0, seconds / total)
+                if frac - reported[0] >= 0.0005:
+                    reported[0] = frac
+                    on_fraction(frac)
+
+    follower = threading.Thread(target=follow, daemon=True)
+    follower.start()
+    try:
+        data = process.stdout.read()
+    finally:
+        process.wait()
+        follower.join(timeout=10.0)
+        try:
+            _ffmpeg_procs.remove(process)
+        except ValueError:
+            pass
+        try:
+            process.stdout.close()
+            process.stderr.close()
+        except OSError:
+            pass
+    if process.returncode != 0 or not data:
+        raise RuntimeError(f"could not decode {os.path.basename(path)}")
+    return np.frombuffer(data, dtype=np.int16).copy()
 
 
 def decode(path, progress=None, should_stop=None, workers: int = 1,
@@ -282,9 +461,9 @@ def decode(path, progress=None, should_stop=None, workers: int = 1,
     """
     The file as 16 kHz mono int16, from the cache when possible.
 
-    Several workers means several ffmpeg slices decoded in parallel: the whole
-    file through one process takes about a minute for a four hour film, and the
-    slices bring that down to the number of cores.
+    The mechanism is the one that worked in 3.1.x: slices decode in parallel, each
+    follows its own FFmpeg position and the bar is driven by the sum of those
+    positions, so it moves the whole time instead of jumping when a slice ends.
     """
     cache_path = os.path.join(_cache_dir(), f"track-{_track_key(path)}.pcm")
     if os.path.exists(cache_path):
@@ -301,46 +480,12 @@ def decode(path, progress=None, should_stop=None, workers: int = 1,
     except Exception:
         duration = 0.0
     workers = max(1, int(workers))
-    data = None
-    if duration > 0.0 and workers > 1:
-        slices = max(1, min(workers, int(duration // 30.0) or 1))
-        if progress:
-            progress(f"Decoding in {slices} parallel slices…")
-        step = duration / slices
-        pieces = [None] * slices
-        done = 0
-        last = [0.0]
-
-        def report(index: int, seconds: float) -> None:
-            if on_fraction is None:
-                return
-            now = time.time()
-            if now - last[0] < 0.1:
-                return
-            last[0] = now
-            overall = (index * step + min(seconds, step)) / max(duration, 1e-6)
-            on_fraction(min(1.0, overall))
-
-        with ThreadPoolExecutor(max_workers=slices) as pool:
-            futures = {pool.submit(_decode_chunk, path, index * step, step,
-                                   (lambda seconds, i=index: report(i, seconds))): index
-                       for index in range(slices)}
-            for future in as_completed(futures):
-                pieces[futures[future]] = future.result()
-                done += 1
-                if on_fraction:
-                    on_fraction(done / slices)
-        if all(piece is not None for piece in pieces):
-            data = np.concatenate(pieces)
-    if data is None:
-        if on_fraction:
-            on_fraction(0.0)
-        out = _run([_ffmpeg(), "-v", "error", "-nostdin", "-i", path,
-                    "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR),
-                    "-f", "s16le", "-"], capture_output=True)
-        if out.returncode != 0 or not out.stdout:
-            raise RuntimeError(f"could not decode {os.path.basename(path)}")
-        data = np.frombuffer(out.stdout, dtype=np.int16).copy()
+    if duration >= 180.0 and workers > 1:
+        data = _decode_parallel(path, duration, workers, on_fraction, should_stop)
+    else:
+        data = _decode_sequential(path, duration, on_fraction, should_stop)
+    if not len(data):
+        raise RuntimeError(f"could not decode {os.path.basename(path)}")
     try:
         data.tofile(cache_path)
     except OSError:
@@ -2926,6 +3071,12 @@ class MainWindow(FluentWindow):
 
 
 def main() -> int:
+    global _instance_handle
+    _instance_handle = acquire_single_instance()
+    if _instance_handle is None:
+        show_message(APP_NAME, f"{APP_NAME} is already running.\n"
+                               "Close the other window first.")
+        return 0
     if os.name == "nt":
         # without an explicit AppUserModelID Windows groups the window under
         # python.exe and shows the interpreter's icon in the taskbar

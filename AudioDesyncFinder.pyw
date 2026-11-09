@@ -123,7 +123,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.7"
+APP_VERSION = "4.0.8"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1571,6 +1571,79 @@ def single_line_plan(points, duration: float):
             "reliable": len(usable), "points": len(points)}
 
 
+def measure_around(ref_env, tgt_env, when: float, window: float = 2.0,
+                   prior: float = 0.0, search: float = 3.0):
+    """
+    The offset measured on a short window - the waveform, not a model.
+
+    A jump placed by 80 s blocks lands somewhere inside a transition; the only way
+    to cut exactly is to measure a second or two of real audio on each side of it
+    and take those two positions as the cut.
+    """
+    return measure_block(ref_env, tgt_env, max(0.0, when - window / 2.0),
+                         prior, window, search)
+
+
+def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 2.0):
+    """
+    Place every cut on the waveform, on both sides of the transition.
+
+    The model says the offset changes somewhere in this neighbourhood; the
+    waveform says exactly where, because it can be measured in a two second window
+    immediately before and after.  The boundary goes to the start of the detected
+    fade zone, the two levels come from those windows, and the amount to skip is
+    their difference - no more, no less.
+
+    Returns (plan, notes).
+    """
+    segments = plan.get("segments") or []
+    if len(segments) < 2:
+        return plan, []
+    zones = zones if zones is not None else transition_zones(ref, tgt)
+    ref_env, tgt_env = envelope(ref), envelope(tgt)
+    notes = []
+    for index in range(1, len(segments)):
+        boundary = float(segments[index]["t_start"])
+        zone = min(zones, key=lambda z: abs(z[0] - boundary), default=None)
+        if zone is None or abs(zone[0] - boundary) > 300.0:
+            continue
+        start, length = zone
+        prior_before = float(segments[index - 1]["offset"])
+        prior_after = float(segments[index]["offset"])
+        before = measure_around(ref_env, tgt_env, start - window, window,
+                                prior_before, 3.0)
+        after = measure_around(ref_env, tgt_env, start + length / 1000.0 + window,
+                               window, prior_after, 3.0)
+        if before is None or after is None:
+            continue
+        if before["support"] < 0.25 or after["support"] < 0.25:
+            continue
+        offset_before = float(before["offset"])
+        offset_after = float(after["offset"])
+        removed = offset_after - offset_before
+        if removed <= 100.0:
+            continue
+        segments[index - 1]["t_end"] = round(start, 2)
+        segments[index]["t_start"] = round(start, 2)
+        segments[index - 1]["offset"] = round(offset_before, 2)
+        segments[index]["offset"] = round(offset_after, 2)
+        notes.append(
+            f"cut at {format_timecode(start)}: {removed / 1000:.2f} s removed, "
+            f"offset {offset_before:+.0f} -> {offset_after:+.0f} ms "
+            f"(fade zone {length / 1000:.1f} s)")
+    jumps = []
+    for previous, current in zip(segments, segments[1:]):
+        at = previous["offset"] + previous["slope"] * (current["t_start"] - previous["t_start"])
+        delta = current["offset"] - at
+        jumps.append({"t": current["t_start"], "delta": round(delta, 2),
+                      "mode": "pad" if delta < 0 else "skip"})
+    out = dict(plan)
+    out["segments"] = segments
+    out["jumps"] = jumps
+    out["waveform_cuts"] = True
+    return out, notes
+
+
 def plan_lines(plan):
     """Human-readable summary of the model."""
     segments = plan.get("segments") or []
@@ -2835,6 +2908,9 @@ class MainWindow(FluentWindow):
                         f"Hole in the target at {format_timecode(after)} "
                         f"({length:.1f} s) - the cut moved there from "
                         f"{format_timecode(before)}.")))
+            plan, cut_notes = refine_cuts_by_waveform(ref, tgt, plan)
+            for note in cut_notes:
+                self.ui_queue.put(("log", note))
             hole_plan = plan_from_holes(points, holes, duration)
             if hole_plan and not plan.get("jumps"):
                 plan = hole_plan

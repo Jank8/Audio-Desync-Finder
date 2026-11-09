@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.0.8
+
+- **the cut is measured on the waveform, on both sides of the transition.**
+  `refine_cuts_by_waveform()` takes a short window immediately before and after the
+  detected fade zone, measures the offset in each, and sets the boundary to the
+  start of the zone with the two levels taken from those windows - so the amount
+  skipped is their difference, measured, not a block's guess
+- it only fires when both windows lock (support >= 0.25); a note says what it did
+- measured on the Return of the King pair: the window *before* the fade locks at
+  +0 ms with support 0.94, but every window *after* it fails (offsets -2540, -3000,
+  +2550 with support 0.30 down to 0.13). The audio after that transition simply
+  does not match the reference there, which is the honest answer to "why is the
+  jump 4.8 s while the fade is 2.8 s": the rest is a real difference between the
+  two cuts, not a transition
 ## 4.0.7
 
 - **fade-to-black transitions are measured, not guessed.** Looking for digital

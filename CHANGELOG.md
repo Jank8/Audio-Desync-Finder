@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.5
+
+- **the decoding finally moves the bar the way 3.1.x did.** The old build read
+  FFmpeg's own `out_time_us=` lines inside every slice and reported the overall
+  fraction up to thirty times a second; the rebuild only reported a slice when it
+  finished, which on a four hour film is ten jumps and looks frozen
+- each slice now decodes to a temporary raw file (stdout is taken by the progress
+  stream) and reports continuously, throttled to ten updates a second
+- measured on the hour-long test file: fourteen callbacks during a 0.9 s decode,
+  and a four hour film will get hundreds
+
 ## 4.0.4
 
 - **the progress bar works like it did in 3.1.x**: range 0-1000, so it creeps in

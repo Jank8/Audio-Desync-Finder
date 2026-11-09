@@ -88,6 +88,7 @@ if _missing:
 import hashlib  # noqa: E402
 import json  # noqa: E402
 import shutil  # noqa: E402
+import tempfile  # noqa: E402
 import time  # noqa: E402
 from concurrent.futures import as_completed  # noqa: E402
 from concurrent.futures.thread import ThreadPoolExecutor  # noqa: E402
@@ -122,7 +123,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.4"
+APP_VERSION = "4.0.5"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -232,19 +233,48 @@ def _track_key(path):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _decode_chunk(path: str, start: float, length: float):
-    """One slice of the file, decoded on its own."""
-    cmd = [_ffmpeg(), "-v", "error", "-nostdin"]
+def _decode_chunk(path: str, start: float, length: float, on_progress=None):
+    """
+    One slice of the file, decoded on its own, reporting how far it has got.
+
+    FFmpeg writes its progress as `out_time_us=` lines, so a slice that takes ten
+    seconds can move the bar the whole time instead of jumping when it ends.  The
+    PCM goes to a temporary file because stdout is taken by the progress stream.
+    """
+    out_path = os.path.join(tempfile.gettempdir(),
+                            f"ads2slice-{os.getpid()}-{threading.get_ident()}-"
+                            f"{int(start * 1000)}.raw")
+    cmd = [_ffmpeg(), "-v", "error", "-nostdin", "-progress", "pipe:1", "-nostats"]
     if start > 0.0:
         cmd += ["-ss", f"{start:.3f}"]
     cmd += ["-i", path, "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR)]
     if length > 0.0:
         cmd += ["-t", f"{length:.3f}"]
-    cmd += ["-f", "s16le", "-"]
-    out = _run(cmd, capture_output=True)
-    if out.returncode != 0 or not out.stdout:
+    cmd += ["-f", "s16le", out_path]
+    flags = 0x08000000 if os.name == "nt" else 0
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, creationflags=flags)
+    try:
+        for line in process.stdout:
+            line = line.strip()
+            if line.startswith("out_time_us=") and on_progress is not None:
+                try:
+                    on_progress(float(line.split("=", 1)[1]) / 1e6)
+                except ValueError:
+                    continue
+    finally:
+        process.stdout.close()
+        process.wait()
+    if process.returncode != 0 or not os.path.exists(out_path):
+        if os.path.exists(out_path):
+            os.remove(out_path)
         return None
-    return np.frombuffer(out.stdout, dtype=np.int16)
+    data = np.fromfile(out_path, dtype=np.int16)
+    try:
+        os.remove(out_path)
+    except OSError:
+        pass
+    return data
 
 
 def decode(path, progress=None, should_stop=None, workers: int = 1,
@@ -279,8 +309,21 @@ def decode(path, progress=None, should_stop=None, workers: int = 1,
         step = duration / slices
         pieces = [None] * slices
         done = 0
+        last = [0.0]
+
+        def report(index: int, seconds: float) -> None:
+            if on_fraction is None:
+                return
+            now = time.time()
+            if now - last[0] < 0.1:
+                return
+            last[0] = now
+            overall = (index * step + min(seconds, step)) / max(duration, 1e-6)
+            on_fraction(min(1.0, overall))
+
         with ThreadPoolExecutor(max_workers=slices) as pool:
-            futures = {pool.submit(_decode_chunk, path, index * step, step): index
+            futures = {pool.submit(_decode_chunk, path, index * step, step,
+                                   (lambda seconds, i=index: report(i, seconds))): index
                        for index in range(slices)}
             for future in as_completed(futures):
                 pieces[futures[future]] = future.result()

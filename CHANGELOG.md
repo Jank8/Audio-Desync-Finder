@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0.1
+
+- the progress bar shows the decoding: every finished slice reports its share, so
+  a four hour film says `Decoding reference… 38 %` instead of sitting at zero for
+  a minute. The bar is split honestly - reference 0-25 %, target 25-50 %,
+  measuring 50-95 %, done 100 %
+- the window title carries the version, so it is obvious which build is running
+
 ## 4.0.0
 
 The programme was rebuilt from scratch. Everything below the interface is new; the

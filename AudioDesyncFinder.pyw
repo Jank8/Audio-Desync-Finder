@@ -122,7 +122,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.1"
+APP_VERSION = "4.0.2"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2230,12 +2230,18 @@ class MainWindow(FluentWindow):
         bottom.addWidget(log_card, 1)
         layout.addLayout(bottom, 1)
 
-        footer = QHBoxLayout()
+        # the bar gets a row of its own: sharing the buttons' row squeezed it to
+        # a four pixel sliver and nobody could see the progress at all
         self.progress = ProgressBar()
         self.progress.setValue(0)
-        footer.addWidget(self.progress, 1)
+        self.progress.setFixedHeight(8)
+        self.progress.setMinimumWidth(300)
+        layout.addWidget(self.progress)
+
+        footer = QHBoxLayout()
         self.status = BodyLabel("Ready")
         footer.addWidget(self.status)
+        footer.addStretch(1)
         self.btn_delete = PushButton("Delete point")
         self.btn_delete.clicked.connect(self.delete_point)
         footer.addWidget(self.btn_delete)

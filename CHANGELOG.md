@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.0.2
+
+- **the progress bar is visible.** It shared a row with the status text and the
+  buttons and was squeezed to 111 x 4 pixels, so nothing could be seen even
+  though the numbers were arriving (0, 25, 52 ... 100). It has its own row now,
+  eight pixels tall and at least 300 wide
+
 ## 4.0.1
 
 - the progress bar shows the decoding: every finished slice reports its share, so

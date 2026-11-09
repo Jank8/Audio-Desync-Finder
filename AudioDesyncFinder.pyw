@@ -89,6 +89,7 @@ import hashlib  # noqa: E402
 import json  # noqa: E402
 import shutil  # noqa: E402
 import time  # noqa: E402
+from concurrent.futures import as_completed  # noqa: E402
 from concurrent.futures.thread import ThreadPoolExecutor  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -246,7 +247,8 @@ def _decode_chunk(path: str, start: float, length: float):
     return np.frombuffer(out.stdout, dtype=np.int16)
 
 
-def decode(path, progress=None, should_stop=None, workers: int = 1):
+def decode(path, progress=None, should_stop=None, workers: int = 1,
+           on_fraction=None):
     """
     The file as 16 kHz mono int16, from the cache when possible.
 
@@ -272,14 +274,20 @@ def decode(path, progress=None, should_stop=None, workers: int = 1):
         slices = max(1, min(workers, int(duration // 30.0) or 1))
         step = duration / slices
         pieces = [None] * slices
+        done = 0
         with ThreadPoolExecutor(max_workers=slices) as pool:
             futures = {pool.submit(_decode_chunk, path, index * step, step): index
                        for index in range(slices)}
-            for future, index in futures.items():
-                pieces[index] = future.result()
+            for future in as_completed(futures):
+                pieces[futures[future]] = future.result()
+                done += 1
+                if on_fraction:
+                    on_fraction(done / slices)
         if all(piece is not None for piece in pieces):
             data = np.concatenate(pieces)
     if data is None:
+        if on_fraction:
+            on_fraction(0.0)
         out = _run([_ffmpeg(), "-v", "error", "-nostdin", "-i", path,
                     "-map", "0:a:0", "-ac", "1", "-ar", str(SCAN_SR),
                     "-f", "s16le", "-"], capture_output=True)
@@ -290,6 +298,8 @@ def decode(path, progress=None, should_stop=None, workers: int = 1):
         data.tofile(cache_path)
     except OSError:
         pass
+    if on_fraction:
+        on_fraction(1.0)
     return data
 
 
@@ -2466,10 +2476,20 @@ class MainWindow(FluentWindow):
             started = time.time()
             self.ui_queue.put(("status", "Decoding…"))
             cores = int(self._num(self.edit_cores, max(1, (os.cpu_count() or 4) - 2)))
+
+            def decoding(base: float, span: float, label: str):
+                def report(fraction: float) -> None:
+                    value = base + span * max(0.0, min(1.0, fraction))
+                    self.ui_queue.put(("progress", (
+                        value, f"Decoding {label}… {100.0 * fraction:.0f} %")))
+                return report
+
             ref = decode(self.ref_path, workers=cores,
-                         progress=lambda m: self.ui_queue.put(("status", m)))
+                         progress=lambda m: self.ui_queue.put(("status", m)),
+                         on_fraction=decoding(0.0, 25.0, "reference"))
             tgt = decode(self.tgt_path, workers=cores,
-                         progress=lambda m: self.ui_queue.put(("status", m)))
+                         progress=lambda m: self.ui_queue.put(("status", m)),
+                         on_fraction=decoding(25.0, 25.0, "target"))
             duration = min(len(ref), len(tgt)) / SCAN_SR
             block = max(10.0, float(self.edit_block.text() or BLOCK_S))
             # the correlation window and the step are the same thing in this
@@ -2519,7 +2539,7 @@ class MainWindow(FluentWindow):
             points = scan(env_a, env_b, block=block, window=window, duration=duration,
                           mode=mode,
                           progress=lambda done, total: self.ui_queue.put(
-                              ("progress", (70.0 * done / max(total, 1),
+                              ("progress", (50.0 + 45.0 * done / max(total, 1),
                                             f"Measuring {done}/{total} blocks"))),
                           should_stop=self.stop_event.is_set)
             if self.stop_event.is_set():

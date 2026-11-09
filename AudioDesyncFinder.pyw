@@ -123,7 +123,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.8"
+APP_VERSION = "4.0.9"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1571,6 +1571,50 @@ def single_line_plan(points, duration: float):
             "reliable": len(usable), "points": len(points)}
 
 
+def waveform_offset(ref, tgt, centre: float, window: float = 30.0,
+                    prior: float = 0.0, search: float = 30.0, decimate: int = 4):
+    """
+    The offset of one 30 s stretch, measured on the waveform itself.
+
+    The envelope is what the scan uses, because it survives a different language.
+    At a cut, though, the question is not "the same music" but "the same samples",
+    and thirty seconds of decimated waveform lock onto that far more sharply than
+    any envelope, as long as the search is wide enough to reach the other side.
+    """
+    step = max(1, int(decimate))
+    frames = int(window * SCAN_SR)
+    start = int((centre - window / 2.0) * SCAN_SR)
+    if start < 0 or start + frames > len(ref):
+        return None
+    a = np.asarray(ref[start:start + frames:step], dtype=np.float64)
+    a = a - a.mean()
+    norm = float(np.linalg.norm(a))
+    if norm < 1e-6:
+        return None
+    span = int(search * SCAN_SR)
+    lo = max(0, start + int(prior / 1000.0 * SCAN_SR) - span)
+    hi = min(len(tgt) - frames, start + int(prior / 1000.0 * SCAN_SR) + span)
+    if hi <= lo:
+        return None
+    b = np.asarray(tgt[lo:hi + frames:step], dtype=np.float64)
+    b = b - b.mean()
+    window_len = len(a)                     # decimated, so the energy uses it too
+    corr = np.correlate(b, a / norm, mode="valid")
+    squares = np.concatenate(([0.0], np.cumsum(b * b)))
+    energy = np.sqrt(np.maximum(squares[window_len:] - squares[:-window_len], 1e-9))
+    scores = corr / energy
+    best = int(np.argmax(scores))
+    value = float(scores[best])
+    rival = 0.0
+    guard = int(0.5 * SCAN_SR / step)
+    for index in range(0, len(scores)):
+        if abs(index - best) >= guard and scores[index] > rival:
+            rival = float(scores[index])
+    lag = (lo + best * step) - start
+    return {"offset": round(lag / SCAN_SR * 1000.0, 2),
+            "support": round(value, 4), "contrast": round(value - rival, 4)}
+
+
 def measure_around(ref_env, tgt_env, when: float, window: float = 2.0,
                    prior: float = 0.0, search: float = 3.0):
     """
@@ -1584,15 +1628,15 @@ def measure_around(ref_env, tgt_env, when: float, window: float = 2.0,
                          prior, window, search)
 
 
-def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 2.0):
+def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
+                           search: float = 30.0):
     """
-    Place every cut on the waveform, on both sides of the transition.
+    Cut the target to match the reference, measured 30 s either side of the cut.
 
-    The model says the offset changes somewhere in this neighbourhood; the
-    waveform says exactly where, because it can be measured in a two second window
-    immediately before and after.  The boundary goes to the start of the detected
-    fade zone, the two levels come from those windows, and the amount to skip is
-    their difference - no more, no less.
+    The model says the offset changes in this neighbourhood.  Thirty seconds of
+    waveform before the cut and thirty after say exactly where the target has to
+    be joined: the difference between those two offsets is how much of the target
+    is not in the reference, and the boundary is where the transition begins.
 
     Returns (plan, notes).
     """
@@ -1600,37 +1644,52 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 2.0):
     if len(segments) < 2:
         return plan, []
     zones = zones if zones is not None else transition_zones(ref, tgt)
-    ref_env, tgt_env = envelope(ref), envelope(tgt)
     notes = []
     for index in range(1, len(segments)):
         boundary = float(segments[index]["t_start"])
         zone = min(zones, key=lambda z: abs(z[0] - boundary), default=None)
-        if zone is None or abs(zone[0] - boundary) > 300.0:
-            continue
-        start, length = zone
+        centre = zone[0] if zone and abs(zone[0] - boundary) <= 300.0 else boundary
+        length = zone[1] if zone else 0.0
         prior_before = float(segments[index - 1]["offset"])
         prior_after = float(segments[index]["offset"])
-        before = measure_around(ref_env, tgt_env, start - window, window,
-                                prior_before, 3.0)
-        after = measure_around(ref_env, tgt_env, start + length / 1000.0 + window,
-                               window, prior_after, 3.0)
-        if before is None or after is None:
+        ref_env, tgt_env = envelope(ref), envelope(tgt)
+        left = waveform_offset(ref, tgt, centre - window / 2.0, window,
+                               prior_before, search)
+        right = waveform_offset(ref, tgt, centre + length / 1000.0 + window / 2.0,
+                                window, prior_after, search)
+        # two different masters do not share samples: the raw waveform only locks
+        # when both files come from the same mix, so the envelope is the fallback -
+        # it is what survives a re-recording of the dialogue
+        if (left is None or left["support"] < 0.2) or (right is None or right["support"] < 0.2):
+            envelope_left = measure_around(ref_env, tgt_env, centre - window / 2.0,
+                                           window, prior_before, search)
+            envelope_right = measure_around(ref_env, tgt_env,
+                                            centre + length / 1000.0 + window / 2.0,
+                                            window, prior_after, search)
+            if envelope_left is not None and (left is None or envelope_left["support"] > left["support"]):
+                left = envelope_left
+            if envelope_right is not None and (right is None or envelope_right["support"] > right["support"]):
+                right = envelope_right
+        if left is None or right is None:
             continue
-        if before["support"] < 0.25 or after["support"] < 0.25:
+        if left["support"] < 0.15 or right["support"] < 0.15:
+            notes.append(f"cut at {format_timecode(centre)}: left "
+                         f"{left['support']:.2f} / right {right['support']:.2f} "
+                         "support - left where it is")
             continue
-        offset_before = float(before["offset"])
-        offset_after = float(after["offset"])
+        offset_before = float(left["offset"])
+        offset_after = float(right["offset"])
         removed = offset_after - offset_before
         if removed <= 100.0:
             continue
-        segments[index - 1]["t_end"] = round(start, 2)
-        segments[index]["t_start"] = round(start, 2)
+        segments[index - 1]["t_end"] = round(centre, 2)
+        segments[index]["t_start"] = round(centre, 2)
         segments[index - 1]["offset"] = round(offset_before, 2)
         segments[index]["offset"] = round(offset_after, 2)
         notes.append(
-            f"cut at {format_timecode(start)}: {removed / 1000:.2f} s removed, "
+            f"cut at {format_timecode(centre)}: {removed / 1000:.2f} s removed, "
             f"offset {offset_before:+.0f} -> {offset_after:+.0f} ms "
-            f"(fade zone {length / 1000:.1f} s)")
+            f"(30 s windows, support {left['support']:.2f}/{right['support']:.2f})")
     jumps = []
     for previous, current in zip(segments, segments[1:]):
         at = previous["offset"] + previous["slope"] * (current["t_start"] - previous["t_start"])

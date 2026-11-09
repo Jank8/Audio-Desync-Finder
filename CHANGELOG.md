@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.0.9
+
+- **the cut is measured 30 s to each side of it, and the target is cut to match
+  the reference.** `refine_cuts_by_waveform()` takes thirty seconds of audio
+  before the boundary and thirty after it, measures the offset in each, and sets
+  the boundary and both levels from those two numbers - the amount removed is
+  their difference, measured, not inferred from an 80 s block
+- the raw waveform is tried first (it gives sample precision when both files come
+  from the same mix), but two different masters do not share samples: on the
+  Return of the King pair the waveform support is 0.03-0.04 while the envelope
+  locks at 0.92/0.79, so the envelope is the fallback
+- measured on that pair: `cut at 2:07:38: 5.03 s removed, offset +0 -> +5030 ms`
+  - the cut now carries its own numbers instead of inheriting the block's +60/+4890
+
 ## 4.0.8
 
 - **the cut is measured on the waveform, on both sides of the transition.**

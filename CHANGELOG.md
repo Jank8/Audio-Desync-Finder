@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.0.3
+
+- **the status bar says `reference` and `target`, never the file name.** The names
+  are already in the fields above, and in the bar they only pushed the useful
+  numbers out: `Decoding reference… 38 %` instead of the whole title of the film
+
 ## 4.0.2
 
 - **the progress bar is visible.** It shared a row with the status text and the

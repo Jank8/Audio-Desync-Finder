@@ -122,7 +122,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.2"
+APP_VERSION = "4.0.3"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2490,11 +2490,12 @@ class MainWindow(FluentWindow):
                         value, f"Decoding {label}… {100.0 * fraction:.0f} %")))
                 return report
 
+            # the status says "reference" and "target", never the file name: the
+            # names are already in the fields above and only push the useful
+            # information out of the bar
             ref = decode(self.ref_path, workers=cores,
-                         progress=lambda m: self.ui_queue.put(("status", m)),
                          on_fraction=decoding(0.0, 25.0, "reference"))
             tgt = decode(self.tgt_path, workers=cores,
-                         progress=lambda m: self.ui_queue.put(("status", m)),
                          on_fraction=decoding(25.0, 25.0, "target"))
             duration = min(len(ref), len(tgt)) / SCAN_SR
             block = max(10.0, float(self.edit_block.text() or BLOCK_S))

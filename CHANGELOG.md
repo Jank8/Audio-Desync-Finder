@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.4
+
+- **the progress bar works like it did in 3.1.x**: range 0-1000, so it creeps in
+  tenths of a percent instead of jumping in whole tens, and it is refreshed the
+  moment a scan starts
+- the decoding phase says how many parallel slices it is working through
+  (`Decoding in 10 parallel slices…`), so it is obvious that the silence is a
+  long slice rather than a hung decode
+- a cached track reports 100 % at once, because there is nothing to decode
+
 ## 4.0.3
 
 - **the status bar says `reference` and `target`, never the file name.** The names

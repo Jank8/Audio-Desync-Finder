@@ -122,7 +122,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.3"
+APP_VERSION = "4.0.4"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -260,6 +260,8 @@ def decode(path, progress=None, should_stop=None, workers: int = 1,
     if os.path.exists(cache_path):
         data = np.fromfile(cache_path, dtype=np.int16)
         if data.size:
+            if on_fraction:
+                on_fraction(1.0)
             return data
     if progress:
         progress(f"Decoding {os.path.basename(path)}…")
@@ -272,6 +274,8 @@ def decode(path, progress=None, should_stop=None, workers: int = 1,
     data = None
     if duration > 0.0 and workers > 1:
         slices = max(1, min(workers, int(duration // 30.0) or 1))
+        if progress:
+            progress(f"Decoding in {slices} parallel slices…")
         step = duration / slices
         pieces = [None] * slices
         done = 0
@@ -2233,6 +2237,7 @@ class MainWindow(FluentWindow):
         # the bar gets a row of its own: sharing the buttons' row squeezed it to
         # a four pixel sliver and nobody could see the progress at all
         self.progress = ProgressBar()
+        self.progress.setRange(0, 1000)      # 0.1 % steps, so the bar creeps
         self.progress.setValue(0)
         self.progress.setFixedHeight(8)
         self.progress.setMinimumWidth(300)
@@ -2281,7 +2286,7 @@ class MainWindow(FluentWindow):
                 self.status.setText(payload)
             elif kind == "progress":
                 value, text = payload
-                self.progress.setValue(int(value))
+                self.progress.setValue(int(round(float(value) * 10.0)))
                 if text:
                     self.status.setText(text)
             elif kind == "points":
@@ -2299,10 +2304,10 @@ class MainWindow(FluentWindow):
             elif kind == "done":
                 self.btn_scan.setEnabled(True)
                 self.btn_stop.setEnabled(False)
-                self.progress.setValue(100)
+                self.progress.setValue(1000)
             elif kind == "export_done":
                 self.btn_export.setEnabled(True)
-                self.progress.setValue(100)
+                self.progress.setValue(1000)
 
     def _centre_on_screen(self) -> None:
         """Put the window in the middle of the available screen, once."""
@@ -2470,6 +2475,7 @@ class MainWindow(FluentWindow):
         self.btn_scan.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.progress.setValue(0)
+        self.progress.update()
         self.worker = threading.Thread(target=self._scan_task, daemon=True)
         self.worker.start()
 

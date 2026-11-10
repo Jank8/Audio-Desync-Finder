@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.15
+
+- **a short window is called out.** With Block 10 and Window 10 the offsets scatter
+  over tens of seconds - a ten second window cannot tell a real lag from a
+  coincidence when the search spans +-90 s - the model collapses to one line and
+  the real cuts disappear into the cloud. The scan now says so instead of quietly
+  producing a meaningless result
+- the table separates `off line` (a block that correlates well, support >= 0.5, but
+  sits away from the fitted line) from `dialogue` (did not correlate at all); a
+  row with support 0.99 used to say `dialogue`, which was simply wrong
+
 ## 4.0.14
 
 - **the Window field keeps what you type.** The scan used to overwrite it with the

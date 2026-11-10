@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.14"
+APP_VERSION = "4.0.15"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -3013,6 +3013,12 @@ class MainWindow(FluentWindow):
                                       f"target {len(tgt) / SCAN_SR:.0f} s"))
             self.ui_queue.put(("log", f"Scanning {duration:.0f} s in blocks of "
                                       f"{block:.0f} s, window {window:.0f} s"))
+            if window < 20.0:
+                self.ui_queue.put(("log", (
+                    f"A {window:.0f} s window is too short to tell a real lag from "
+                    "a coincidence over a +-90 s search: the offsets scatter over "
+                    "tens of seconds, the model collapses to one line and the real "
+                    "cuts disappear into the cloud. Use 40-80 s.")))
             hint = fps_slope(self.meta.get("ref_fps"), self.meta.get("tgt_fps"))
             fps_atempo = 1.0
             if hint:
@@ -3370,8 +3376,12 @@ class MainWindow(FluentWindow):
             near_cut = index in cut_rows
             if near_cut:
                 kind = "cut"
+            elif point.get("reliable"):
+                kind = "same audio"
+            elif float(point.get("support") or 0.0) >= 0.5:
+                kind = "off line"
             else:
-                kind = "same audio" if point.get("reliable") else "dialogue"
+                kind = "dialogue"
             values = (self._timecode(point["t"]), f"{point['offset']:+.1f}",
                       f"{point.get('support', 0):.2f}", kind)
             for column, text in enumerate(values):

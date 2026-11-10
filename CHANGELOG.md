@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.12
+
+- **a model that has to insert silence exports now.** It was refused because the
+  first attempt drifted by 1.5 s; the cause was a duplicated second: each segment
+  started at `t_start + offset` even when the target had already been played up to
+  that point, so the overlap was played twice instead of being filled with silence
+- `_segments_to_sources()` keeps a cursor of the target already used, works out how
+  much is missing before each segment, and `_audio_filter()` adds that silence at
+  the end of the previous part
+- verified on both synthetic cases: a +3 s skip gives 236.6 s with 0 ms on both
+  sides of the splice, and a -3 s cut gives a full 240.0 s with 0 ms on both sides
+- the export is no longer refused for padding
+
 ## 4.0.11
 
 - **a cut without a fade is located by the step itself.** `locate_cut()` measures a

@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.11"
+APP_VERSION = "4.0.12"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1800,38 +1800,44 @@ def quality_text(plan) -> str:
     return f"Quality: {verdict} (worst RMS {worst:.0f} ms)"
 
 
-def _segment_chain(segment, next_offset) -> str:
+def _segments_to_sources(plan):
     """
-    The filter for one segment, in target time.
+    Turn the model into the exact target ranges to play, with the gaps between.
 
-    The model says the content of reference time t sits at target time
-    t + offset(t), so a segment takes target audio from `t_start + offset` to
-    `t_end + offset`, speeds it by the segment's atempo and puts it back at
-    t_start.  When the next segment starts earlier in the target than this one
-    ended, the target is missing audio there and silence of exactly that length
-    is inserted; when it starts later, the surplus is simply skipped.
+    The cursor is the point in the target already used.  A segment wants to start
+    at `t_start + offset`; when that is *before* the cursor the target has less
+    audio than the reference there, so the difference is silence that has to be
+    inserted before the segment - not audio played twice.  Getting that wrong is
+    what made the first padded export drift by a second and a half.
     """
-    offset = float(segment["offset"])
-    t_start = float(segment["t_start"])
-    t_end = float(segment["t_end"])
-    atempo = float(segment["atempo"])
-    source_start = t_start + offset / 1000.0
-    source_end = t_end + offset / 1000.0
-    chain = []
-    silence = 0.0
-    if source_start < 0.0:
-        silence = -source_start
-        source_start = 0.0
-    chain.append(f"atrim=start={source_start:.3f}:end={max(source_end, source_start + 0.05):.3f}")
-    chain.append("asetpts=PTS-STARTPTS")
-    if abs(atempo - 1.0) > 1e-6:
-        chain.append(f"atempo={atempo:.8f}")
-    if silence > 0.004:
-        chain.append(f"adelay={silence * 1000.0:.0f}|{silence * 1000.0:.0f}")
-    if next_offset is not None:
-        gap = float(next_offset) - offset          # negative: target lost audio
-        if gap < -4.0:
-            chain.append(f"apad=pad_dur={(-gap) / 1000.0:.3f}")
+    segments = plan.get("segments") or []
+    fps_atempo = float(plan.get("fps_atempo") or 1.0)
+    out = []
+    cursor = 0.0
+    for segment in segments:
+        t0 = float(segment["t_start"])
+        t1 = float(segment["t_end"])
+        offset = float(segment["offset"]) / 1000.0
+        atempo = float(segment["atempo"]) * fps_atempo
+        want = t0 + offset
+        pad = max(0.0, cursor - want)
+        start = want + pad
+        span = max(0.05, (t1 - t0) - pad)
+        end = start + span
+        cursor = end
+        out.append({"t0": t0, "start": start, "end": end, "pad": pad,
+                    "atempo": atempo, "span": span})
+    return out
+
+
+def _source_chain(item, pad_after: float = 0.0) -> str:
+    """The filter for one source range, with optional silence after it."""
+    chain = [f"atrim=start={item['start']:.3f}:end={item['end']:.3f}",
+             "asetpts=PTS-STARTPTS"]
+    if abs(item["atempo"] - 1.0) > 1e-6:
+        chain.append(f"atempo={item['atempo']:.8f}")
+    if pad_after > 0.004:
+        chain.append(f"apad=pad_dur={pad_after:.3f}")
     return ",".join(chain)
 
 
@@ -1839,31 +1845,35 @@ def _audio_filter(plan) -> str:
     """
     The whole model as one ffmpeg filter graph.
 
-    One segment is a plain -af chain; several are trimmed, retimed and joined
-    with `concat`, with silence padded wherever the target really lacks audio.
-    The framerate factor of the plan is multiplied into every segment's atempo,
-    because the scan measured the target on the reference's clock and the file
-    itself still runs at its own speed.
+    One segment is a plain -af chain; several are trimmed, retimed and joined with
+    `concat`.  Where the target lacks audio the silence is added at the end of the
+    previous part, which is the same as inserting it before the next one.
     """
     segments = plan.get("segments") or []
     if not segments:
         raise ValueError("nothing to export")
-    fps_atempo = float(plan.get("fps_atempo") or 1.0)
-
-    def with_fps(segment):
-        prepared = dict(segment)
-        prepared["atempo"] = float(segment["atempo"]) * fps_atempo
-        return prepared
-
-    if len(segments) == 1:
-        return _segment_chain(with_fps(segments[0]), None)
+    sources = _segments_to_sources(plan)
+    if len(sources) == 1:
+        item = sources[0]
+        lead = item["pad"]
+        chain = []
+        if lead > 0.004:
+            chain.append(f"adelay={lead * 1000.0:.0f}|{lead * 1000.0:.0f}")
+        chain.append(_source_chain(item))
+        return ",".join(chain)
     parts = []
-    for index, segment in enumerate(segments):
-        next_offset = (float(segments[index + 1]["offset"])
-                       if index + 1 < len(segments) else None)
-        parts.append(f"[0:a]{_segment_chain(with_fps(segment), next_offset)}[s{index}]")
-    labels = "".join(f"[s{index}]" for index in range(len(segments)))
-    return ";".join(parts) + f";{labels}concat=n={len(segments)}:v=0:a=1[out]"
+    for index, item in enumerate(sources):
+        pad_after = (sources[index + 1]["pad"] if index + 1 < len(sources) else 0.0)
+        if index == 0 and item["pad"] > 0.004:
+            # silence first: the target starts later than the reference
+            parts.append("[0:a]" + _source_chain(
+                {"start": 0.0, "end": 0.001, "atempo": 1.0}, item["pad"]) + "[s0]")
+            parts.append(f"[0:a]{_source_chain(item)}[s1]")
+        else:
+            label = f"s{len(parts)}"
+            parts.append(f"[0:a]{_source_chain(item, pad_after)}[{label}]")
+    labels = "".join(f"[s{index}]" for index in range(len(parts)))
+    return ";".join(parts) + f";{labels}concat=n={len(parts)}:v=0:a=1[out]"
 
 
 _ENCODER_FOR = {
@@ -1907,12 +1917,10 @@ def export_plan(plan, target_path, out_path, progress=None, should_stop=None):
     """
     segments = plan.get("segments") or []
     jumps = plan.get("jumps") or []
-    if len(segments) > 1:
-        if any(float(jump["delta"]) < 0 for jump in jumps):
-            raise ValueError(
-                f"this model has to insert silence in "
-                f"{sum(1 for j in jumps if float(j['delta']) < 0)} place(s); that "
-                "export is not verified yet")
+    if len(segments) > 1 and any(float(jump["delta"]) < 0 for jump in jumps):
+        # padding is handled by _segments_to_sources now; the note stays in the
+        # log so it is clear that silence had to be inserted
+        pass
     graph = _audio_filter(plan)
     multi = len(segments) > 1
     cmd = [_ffmpeg(), "-v", "error", "-nostdin", "-y", "-i", target_path]

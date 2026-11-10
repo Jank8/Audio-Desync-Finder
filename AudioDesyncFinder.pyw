@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.12"
+APP_VERSION = "4.0.13"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -920,6 +920,36 @@ def resample_track(track, rate: float, chunk: int = 1 << 22):
     return out
 
 
+_LEVELS_CACHE = {}
+
+
+def frame_levels(track, frame_ms: float = 100.0):
+    """
+    Level in dBFS for every frame of a track, computed once and remembered.
+
+    Reshaping the whole track and averaging per row allocated a copy the size of
+    the film - hundreds of megabytes for a 100 ms frame on a two hour film - and
+    every caller did it again, which is why the window froze after "measuring".
+    Chunks and a cache fix both.
+    """
+    key = (id(track), float(frame_ms), len(track))
+    cached = _LEVELS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    hop = max(1, int(SCAN_SR * frame_ms / 1000.0))
+    frames = len(track) // hop
+    levels = np.empty(frames, dtype=np.float32)
+    chunk = 4096
+    for start in range(0, frames, chunk):
+        stop = min(frames, start + chunk)
+        piece = np.asarray(track[start * hop:stop * hop], dtype=np.float32)
+        piece = piece.reshape(stop - start, hop)
+        squares = np.einsum("ij,ij->i", piece, piece) / hop
+        levels[start:stop] = 10.0 * np.log10(np.maximum(squares, 1e-9) / (32768.0 ** 2))
+    _LEVELS_CACHE[key] = levels
+    return levels
+
+
 def black_gaps(track, min_ms: float = 1500.0, db: float = -60.0):
     """
     Stretches where the track is digitally silent - the black inserts.
@@ -932,13 +962,9 @@ def black_gaps(track, min_ms: float = 1500.0, db: float = -60.0):
 
     Returns [(start_seconds, length_ms)].
     """
-    hop = SCAN_SR // 100
-    frames = len(track) // hop
-    if frames < 10:
+    level = frame_levels(track, 10.0)
+    if len(level) < 10:
         return []
-    block = np.asarray(track[:frames * hop], dtype=np.float32).reshape(frames, hop)
-    rms = np.sqrt(np.mean(block * block, axis=1) + 1e-9)
-    level = 20.0 * np.log10(np.maximum(rms, 1e-6) / 32768.0)
     gaps = []
     start = None
     for index, value in enumerate(level):
@@ -1331,14 +1357,14 @@ def transition_zones(ref, tgt, frame_ms: float = 100.0, drop_db: float = 12.0,
 
     Returns [(start_seconds, length_ms)].
     """
-    hop = int(SCAN_SR * frame_ms / 1000.0)
-    frames = min(len(ref), len(tgt)) // hop
+    level_a = frame_levels(ref, frame_ms)
+    level_b = frame_levels(tgt, frame_ms)
+    frames = min(len(level_a), len(level_b))
     if frames < 10:
         return []
-    a = np.asarray(ref[:frames * hop], dtype=np.float32).reshape(frames, hop)
-    b = np.asarray(tgt[:frames * hop], dtype=np.float32).reshape(frames, hop)
-    level_a = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(a * a, axis=1)), 1e-6) / 32768.0)
-    level_b = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(b * b, axis=1)), 1e-6) / 32768.0)
+    level_a = level_a[:frames]
+    level_b = level_b[:frames]
+
     reference_level = float(np.median(level_b)) if len(level_b) else -20.0
     dip = (level_b < reference_level - drop_db) & (level_a > level_b + 6.0)
     zones = []
@@ -1376,14 +1402,14 @@ def target_holes(ref, tgt, min_ms: float = 200.0, quiet_db: float = -90.0,
     line or a broken splice all show up as one, and cutting exactly that stretch
     is what puts the two timelines back together.
     """
-    hop = int(SCAN_SR * frame_ms / 1000.0)
-    frames = min(len(ref), len(tgt)) // hop
+    level_a = frame_levels(ref, frame_ms)
+    level_b = frame_levels(tgt, frame_ms)
+    frames = min(len(level_a), len(level_b))
     if frames < 10:
         return []
-    a = np.asarray(ref[:frames * hop], dtype=np.float32).reshape(frames, hop)
-    b = np.asarray(tgt[:frames * hop], dtype=np.float32).reshape(frames, hop)
-    level_a = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(a * a, axis=1)), 1e-6) / 32768.0)
-    level_b = 20.0 * np.log10(np.maximum(np.sqrt(np.mean(b * b, axis=1)), 1e-6) / 32768.0)
+    level_a = level_a[:frames]
+    level_b = level_b[:frames]
+
     # Digital zero, not "rather quiet": the inserts that matter measure -180 dBFS
     # in the target while the reference sits at -45, so the test is an absolute
     # one.  An earlier relative threshold of a dozen dB found 83 quiet moments of
@@ -1600,7 +1626,9 @@ def waveform_offset(ref, tgt, centre: float, window: float = 30.0,
     b = np.asarray(tgt[lo:hi + frames:step], dtype=np.float64)
     b = b - b.mean()
     window_len = len(a)                     # decimated, so the energy uses it too
-    corr = np.correlate(b, a / norm, mode="valid")
+    # FFT: a direct correlation of a 30 s window against a 60 s search is a
+    # trillion operations and froze the scan for minutes
+    corr = signal.correlate(b, a / norm, mode="valid", method="fft")
     squares = np.concatenate(([0.0], np.cumsum(b * b)))
     energy = np.sqrt(np.maximum(squares[window_len:] - squares[:-window_len], 1e-9))
     scores = corr / energy
@@ -1629,6 +1657,20 @@ def measure_around(ref_env, tgt_env, when: float, window: float = 2.0,
                          prior, window, search)
 
 
+_ENVELOPE_CACHE = {}
+
+
+def cached_envelopes(ref, tgt):
+    """The two envelopes, computed once per scan instead of once per jump."""
+    key = (id(ref), id(tgt), len(ref), len(tgt))
+    cached = _ENVELOPE_CACHE.get(key)
+    if cached is None:
+        cached = (envelope(ref), envelope(tgt))
+        _ENVELOPE_CACHE.clear()
+        _ENVELOPE_CACHE[key] = cached
+    return cached
+
+
 def locate_cut(ref, tgt, around: float, prior_before: float, prior_after: float,
                span: float = 180.0, window: float = 12.0, step: float = 6.0):
     """
@@ -1641,7 +1683,7 @@ def locate_cut(ref, tgt, around: float, prior_before: float, prior_after: float,
 
     Returns (cut_seconds, before_level, after_level) or None.
     """
-    ref_env, tgt_env = envelope(ref), envelope(tgt)
+    ref_env, tgt_env = cached_envelopes(ref, tgt)
     low = max(0.0, around - span)
     high = around + span
     samples = []
@@ -1691,6 +1733,7 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
         return plan, []
     zones = zones if zones is not None else transition_zones(ref, tgt)
     notes = []
+    ref_env, tgt_env = cached_envelopes(ref, tgt)
     for index in range(1, len(segments)):
         boundary = float(segments[index]["t_start"])
         zone = min(zones, key=lambda z: abs(z[0] - boundary), default=None)
@@ -1717,7 +1760,6 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
         length = zone[1]
         prior_before = float(segments[index - 1]["offset"])
         prior_after = float(segments[index]["offset"])
-        ref_env, tgt_env = envelope(ref), envelope(tgt)
         left = waveform_offset(ref, tgt, centre - window / 2.0, window,
                                prior_before, search)
         right = waveform_offset(ref, tgt, centre + length / 1000.0 + window / 2.0,

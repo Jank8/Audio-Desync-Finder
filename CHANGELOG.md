@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.13
+
+- **the scan no longer freezes after "Measuring 74/74 blocks".** Two causes:
+  * `waveform_offset()` correlated a 30 s window against a 60 s search with a
+    direct `np.correlate` - a trillion operations, minutes of work for one jump.
+    It uses an FFT correlation now.
+  * `black_gaps()`, `transition_zones()` and `target_holes()` each reshaped a
+    whole track and averaged it per row - hundreds of megabytes per call, and they
+    were called once per jump. They share `frame_levels()`, computed once per
+    track, and the envelopes behind `locate_cut()` are cached per scan.
+- measured on the goat pair: the same scan went from **191.9 s to 26.7 s**
+- the chart, the table and the log now fill in straight after the measuring phase
+
 ## 4.0.12
 
 - **a model that has to insert silence exports now.** It was refused because the

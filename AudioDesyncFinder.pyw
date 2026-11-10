@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.1.1"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2805,10 +2805,10 @@ class MainWindow(FluentWindow):
         self.edit_cores.setValidator(QIntValidator(1, max(1, os.cpu_count() or 1), self))
         cl.addWidget(StrongBodyLabel("Cores"))
         cl.addWidget(self.edit_cores)
-        self.chk_blocks = CheckBox("Blocks only")
-        self.chk_blocks.setToolTip("Force the block scan instead of following the "
-                                   "whole waveform")
-        cl.addWidget(self.chk_blocks)
+        self.chk_wave = CheckBox("Whole waveform")
+        self.chk_wave.setToolTip("Follow the offset second by second instead of "
+                                 "measuring blocks (experimental, slower to trust)")
+        cl.addWidget(self.chk_wave)
         self.chk_single = CheckBox("Single line")
         self.chk_single.setToolTip("One offset and one drift for the whole film - "
                                    "no jumps at all")
@@ -3174,8 +3174,9 @@ class MainWindow(FluentWindow):
                     f"than the {block:.0f} s block - using {block:.0f} s.")))
             self.ui_queue.put(("log", f"Decoded: reference {len(ref) / SCAN_SR:.0f} s, "
                                       f"target {len(tgt) / SCAN_SR:.0f} s"))
-            self.ui_queue.put(("log", f"Scanning {duration:.0f} s in blocks of "
-                                      f"{block:.0f} s, window {window:.0f} s"))
+            if not self.chk_wave.isChecked():
+                self.ui_queue.put(("log", f"Scanning {duration:.0f} s in blocks of "
+                                          f"{block:.0f} s, window {window:.0f} s"))
             if window < 20.0:
                 self.ui_queue.put(("log", (
                     f"A {window:.0f} s window is too short to tell a real lag from "
@@ -3217,7 +3218,7 @@ class MainWindow(FluentWindow):
             env_b = envelope(tgt)
             mode = {0: "auto", 1: "envelope", 2: "waveform"}.get(
                 self.combo_mode.currentIndex(), "auto")
-            if not self.chk_blocks.isChecked():
+            if self.chk_wave.isChecked():
                 self.ui_queue.put(("status", "Following the waveform…"))
                 tracked = track_offset(ref, tgt)
                 track_plan = plan_from_track(tracked, duration)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.1.1
+
+- **the block scan is the default again.** The whole waveform is behind a
+  `Whole waveform` switch now (off by default): it found the cuts well on one pair
+  and wobbled on another, so it stays available without being in the way
+- the `Scanning ... in blocks of ...` line is only printed when blocks are scanned,
+  so the log no longer mentions blocks while the waveform is being followed
+
 ## 4.1.0
 
 - **the whole waveform is followed, for every pair.** Instead of measuring a block

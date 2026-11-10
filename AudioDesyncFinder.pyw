@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.10"
+APP_VERSION = "4.0.11"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1629,6 +1629,51 @@ def measure_around(ref_env, tgt_env, when: float, window: float = 2.0,
                          prior, window, search)
 
 
+def locate_cut(ref, tgt, around: float, prior_before: float, prior_after: float,
+               span: float = 180.0, window: float = 12.0, step: float = 6.0):
+    """
+    Where exactly the offset steps, when no fade zone marks it.
+
+    The block grid is 80 s, so a boundary inherited from it can be a minute off -
+    the film changes at 10:05 and the model says 11:20.  Measuring a dozen seconds
+    every six across three minutes either side shows the step itself: the level is
+    one value until some moment and the other value after it.
+
+    Returns (cut_seconds, before_level, after_level) or None.
+    """
+    ref_env, tgt_env = envelope(ref), envelope(tgt)
+    low = max(0.0, around - span)
+    high = around + span
+    samples = []
+    t = low
+    while t + window <= high:
+        result = measure_block(ref_env, tgt_env, t,
+                               (prior_before + prior_after) / 2.0, window, 5.0)
+        if result is not None and float(result.get("support") or 0.0) >= 0.3:
+            samples.append((t + window / 2.0, float(result["offset"])))
+        t += step
+    if len(samples) < 6:
+        return None
+    before = [off for _t, off in samples if abs(off - prior_before) <= abs(off - prior_after)]
+    after = [off for _t, off in samples if abs(off - prior_after) < abs(off - prior_before)]
+    if len(before) < 2 or len(after) < 2:
+        return None
+    level_before = float(np.median(before))
+    level_after = float(np.median(after))
+    if abs(level_after - level_before) < 100.0:
+        return None
+
+    def side(offset: float) -> str:
+        return "before" if abs(offset - level_before) <= abs(offset - level_after) else "after"
+
+    labels = [side(off) for _t, off in samples]
+    # the cut is the first place where the label switches and stays switched
+    for index in range(1, len(labels) - 1):
+        if labels[index - 1] == "before" and all(label == "after" for label in labels[index:]):
+            return round(samples[index][0], 2), level_before, level_after
+    return None
+
+
 def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
                            search: float = 30.0):
     """
@@ -1649,8 +1694,27 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
     for index in range(1, len(segments)):
         boundary = float(segments[index]["t_start"])
         zone = min(zones, key=lambda z: abs(z[0] - boundary), default=None)
-        centre = zone[0] if zone and abs(zone[0] - boundary) <= 300.0 else boundary
-        length = zone[1] if zone else 0.0
+        if zone is not None and abs(zone[0] - boundary) > 300.0:
+            zone = None
+        if zone is None:
+            # no fade marks this one, so the step itself has to be found
+            found = locate_cut(ref, tgt, boundary,
+                               float(segments[index - 1]["offset"]),
+                               float(segments[index]["offset"]))
+            if found is None:
+                continue
+            cut_time, level_before, level_after = found
+            segments[index - 1]["t_end"] = cut_time
+            segments[index]["t_start"] = cut_time
+            segments[index - 1]["offset"] = round(level_before, 2)
+            segments[index]["offset"] = round(level_after, 2)
+            notes.append(
+                f"cut located at {format_timecode(cut_time)}: offset "
+                f"{level_before:+.0f} -> {level_after:+.0f} ms, "
+                f"{abs(level_after - level_before) / 1000:.2f} s")
+            continue
+        centre = zone[0]
+        length = zone[1]
         prior_before = float(segments[index - 1]["offset"])
         prior_after = float(segments[index]["offset"])
         ref_env, tgt_env = envelope(ref), envelope(tgt)

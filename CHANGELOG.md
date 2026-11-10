@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.11
+
+- **a cut without a fade is located by the step itself.** `locate_cut()` measures a
+  dozen seconds every six across three minutes either side of the boundary and
+  finds the moment the level switches, for the cuts that no transition marks
+- measured on the goat pair: the boundary the block grid gave (680 s) is wrong,
+  and the step the audio actually shows is at **842 s** - the user sees a cut at
+  10:05, but the correlation matches the first level right through to 14:02, so
+  that cut is not an audio change at all
+- segments built from two blocks (like that pair's 680-840 s stretch at -940 ms,
+  RMS 0) are the weak spot: they look exact because a line through two points is
+  exact, and they are what moves the boundary to the wrong place
+
 ## 4.0.10
 
 - **the measurements around a cut are marked in the table.** For every boundary

@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.13"
+APP_VERSION = "4.0.14"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2998,11 +2998,17 @@ class MainWindow(FluentWindow):
                          on_fraction=decoding(25.0, 25.0, "target"))
             duration = min(len(ref), len(tgt)) / SCAN_SR
             block = max(10.0, float(self.edit_block.text() or BLOCK_S))
-            # the correlation window and the step are the same thing in this
-            # design; letting them differ measured 30 s of every 80 s block and
-            # the model fell apart
-            window = block
-            self.edit_window.setText(str(int(block)))
+            # Window is the correlation length and is left alone: a user who sets
+            # 30 s with an 80 s block means to measure 30 s of every 80, and
+            # rewriting the field back to the block size made the control look
+            # broken.  It is only clamped when it would exceed the block, because
+            # a window longer than the step averages the same audio twice.
+            window = max(5.0, float(self.edit_window.text() or FFT_WINDOW_S))
+            if window > block:
+                window = block
+                self.ui_queue.put(("log", (
+                    f"Window {float(self.edit_window.text() or 0):.0f} s is longer "
+                    f"than the {block:.0f} s block - using {block:.0f} s.")))
             self.ui_queue.put(("log", f"Decoded: reference {len(ref) / SCAN_SR:.0f} s, "
                                       f"target {len(tgt) / SCAN_SR:.0f} s"))
             self.ui_queue.put(("log", f"Scanning {duration:.0f} s in blocks of "

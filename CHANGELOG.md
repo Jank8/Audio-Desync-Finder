@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.0.14
+
+- **the Window field keeps what you type.** The scan used to overwrite it with the
+  block size on every run, so changing 80 to 30 snapped straight back to 80. The
+  window is the correlation length and is independent of the block; it is only
+  clamped (with a line in the log) when it would be longer than the block, because
+  a window longer than the step averages the same audio twice
+- verified: Block 80 with Window 30 scans `window 30 s` and the field still says 30
+
 ## 4.0.13
 
 - **the scan no longer freezes after "Measuring 74/74 blocks".** Two causes:

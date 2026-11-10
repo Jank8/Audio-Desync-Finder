@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.1.2
+
+- **proper dashes in titles and suggested names.** `pretty_title()` turns ` - `
+  into ` – `, and it is used for what the app shows and for the name it suggests
+  when saving - never for a path it has to open, where the real characters matter
+  - the window title now carries the film as well as the programme:
+    `Audio Desync Finder 4.1.2  –  <film>`
+  - the export dialog suggests `<film> – corrected.mka` next to the target file
+    instead of a bare `corrected.mka`
+
 ## 4.1.1
 
 - **the block scan is the default again.** The whole waveform is behind a

@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.1.1"
+APP_VERSION = "4.1.2"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2221,6 +2221,19 @@ def fps_slope(fps_ref, fps_tgt) -> float:
     return (ref / tgt - 1.0) * 1000.0
 
 
+def pretty_title(text: str) -> str:
+    """
+    A title with proper dashes: `-` and `—` become `–`.
+
+    Only ever used for what the app *shows* and for the name it suggests when
+    saving - never for a path it has to open, where the real characters matter.
+    """
+    cleaned = str(text or "").replace(" — ", " – ").replace(" – ", " – ")
+    while " - " in cleaned:
+        cleaned = cleaned.replace(" - ", " – ")
+    return cleaned
+
+
 def format_timecode(seconds: float) -> str:
     seconds = max(0, int(round(float(seconds))))
     hours, rest = divmod(seconds, 3600)
@@ -3102,6 +3115,16 @@ class MainWindow(FluentWindow):
         self.log(f"Reference: {first['duration']:.0f} s at {first['fps'] or 0:.3f} fps")
         self.log(f"Target:    {second['duration']:.0f} s at {second['fps'] or 0:.3f} fps")
         self._update_info()
+        self._update_title()
+
+    def _update_title(self) -> None:
+        """The window title: the programme, and the film when one is chosen."""
+        title = f"{APP_NAME} {APP_VERSION}"
+        if self.tgt_path:
+            stem = os.path.splitext(os.path.basename(self.tgt_path))[0]
+            if stem:
+                title += "  –  " + pretty_title(stem)
+        self.setWindowTitle(title)
 
     def _update_info(self) -> None:
         """Framerate of each file, and what the pair implies - nothing else."""
@@ -3393,8 +3416,10 @@ class MainWindow(FluentWindow):
     def export_audio(self) -> None:
         if not (self.plan and self.plan.get("segments")):
             return
-        start = os.path.join(str(self.settings.value("last_dir", "") or ""),
-                             "corrected.mka")
+        stem = os.path.splitext(os.path.basename(self.tgt_path))[0] or "corrected"
+        start = os.path.join(os.path.dirname(self.tgt_path) or
+                             str(self.settings.value("last_dir", "") or ""),
+                             pretty_title(stem) + " – corrected.mka")
         path, _ = QFileDialog.getSaveFileName(self, "Save corrected audio", start,
                                               "Matroska Audio (*.mka)")
         if not path:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.0.10
+
+- **the measurements around a cut are marked in the table.** For every boundary
+  the nearest measurement before it and the nearest after it get a red dot in the
+  first column and the kind `cut`, because those are the two that describe the
+  step; a fixed +/-30 s window would miss the neighbour on one side, as the block
+  grid is 80 s
+- the row is repainted whenever a new plan arrives
+
 ## 4.0.9
 
 - **the cut is measured 30 s to each side of it, and the target is cut to match

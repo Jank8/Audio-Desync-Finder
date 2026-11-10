@@ -97,7 +97,8 @@ import numpy as np  # noqa: E402
 from scipy import signal  # noqa: E402
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl  # noqa: E402
-from PySide6.QtGui import QColor, QIcon, QIntValidator  # noqa: E402
+from PySide6.QtGui import (QColor, QIcon, QIntValidator, QPainter,  # noqa: E402
+                           QPixmap)
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,  # noqa: E402
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPushButton, QSlider, QTableWidgetItem,
@@ -123,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.9"
+APP_VERSION = "4.0.10"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -2676,6 +2677,7 @@ class MainWindow(FluentWindow):
                 self.summary.setText(self._summary_text(payload))
                 self.quality.setText(quality_text(payload))
                 self.mux.setText(mux_text(payload))
+                self._fill_table()
                 self.btn_export.setEnabled(bool(payload.get("segments")))
                 self._draw()
             elif kind == "done":
@@ -3200,14 +3202,63 @@ class MainWindow(FluentWindow):
                 f"support {self.points[nearest].get('support', 0):.2f}")
 
     # ---- drawing ---------------------------------------------------------
+    def _mark_icon(self, colour: str):
+        """A small painted square used to mark a row in the table."""
+        cached = getattr(self, "_mark_cache", None)
+        if cached is None:
+            cached = {}
+            self._mark_cache = cached
+        if colour in cached:
+            return cached[colour]
+        pixmap = QPixmap(10, 10)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setBrush(QColor(colour))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(1, 1, 8, 8)
+        finally:
+            painter.end()
+        icon = QIcon(pixmap)
+        cached[colour] = icon
+        return icon
+
+    def _cut_rows(self):
+        """
+        The rows to mark: the measurement closest to every cut on each side.
+
+        The block grid is 80 s, so a fixed window would miss the neighbour on one
+        side; the nearest measurement before the cut and the nearest after it are
+        the two that describe the step, and those are what get marked.
+        """
+        cuts = [float(jump["t"]) for jump in (self.plan or {}).get("jumps") or []]
+        rows = set()
+        for cut in cuts:
+            before = [i for i, p in enumerate(self.points) if float(p["t"]) <= cut]
+            after = [i for i, p in enumerate(self.points) if float(p["t"]) > cut]
+            if before:
+                rows.add(max(before, key=lambda i: float(self.points[i]["t"])))
+            if after:
+                rows.add(min(after, key=lambda i: float(self.points[i]["t"])))
+        return rows, {i: True for i in rows}
+
     def _fill_table(self) -> None:
         self.table.setRowCount(len(self.points))
-        for row, point in enumerate(self.points):
-            kind = "same audio" if point.get("reliable") else "dialogue"
+        cut_rows, _ = self._cut_rows()
+        for index, point in enumerate(self.points):
+            near_cut = index in cut_rows
+            if near_cut:
+                kind = "cut"
+            else:
+                kind = "same audio" if point.get("reliable") else "dialogue"
             values = (self._timecode(point["t"]), f"{point['offset']:+.1f}",
                       f"{point.get('support', 0):.2f}", kind)
             for column, text in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                if near_cut and column == 0:
+                    item.setIcon(self._mark_icon("#ff4d4f"))
+                self.table.setItem(index, column, item)
 
     @staticmethod
     def _timecode(seconds: float) -> str:

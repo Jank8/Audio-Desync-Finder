@@ -1,5 +1,25 @@
 # Changelog
 
+## 4.1.0
+
+- **the whole waveform is followed, for every pair.** Instead of measuring a block
+  every eighty seconds and fitting a model through those blocks, the offset is
+  tracked second by second: each step takes six seconds of the reference, looks
+  for it within +-1.5 s of the current offset, and holds the last value where it
+  cannot find itself (re-recorded dialogue). The result is a curve, and the
+  segments are the runs of that curve
+  - a median filter over fifteen seconds removes the tracker's twitch without
+    moving a real step
+  - runs shorter than twenty-five measured seconds are absorbed by the neighbour
+    with the closer level, so a blink cannot open a segment
+  - neighbours that end on the same level within 200 ms are joined
+  - every boundary is then snapped by measurement: the fade zone counts only
+    within 45 s (three minutes away it belongs to another cut), otherwise
+    `locate_cut()` searches +-90 s for the exact second
+- measured on the goat pair: 5974 seconds followed in about 7 s, five segments,
+  and the first cut lands at **10:03** where the block model said 11:20
+- the block scan is still there as the fallback, and `Blocks only` forces it
+
 ## 4.0.15
 
 - **a short window is called out.** With Block 10 and Window 10 the offsets scatter

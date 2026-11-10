@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.0.15"
+APP_VERSION = "4.1.0"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1737,13 +1737,14 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
     for index in range(1, len(segments)):
         boundary = float(segments[index]["t_start"])
         zone = min(zones, key=lambda z: abs(z[0] - boundary), default=None)
-        if zone is not None and abs(zone[0] - boundary) > 300.0:
+        # a fade three minutes away belongs to another cut, not to this one
+        if zone is not None and abs(zone[0] - boundary) > 45.0:
             zone = None
         if zone is None:
             # no fade marks this one, so the step itself has to be found
             found = locate_cut(ref, tgt, boundary,
                                float(segments[index - 1]["offset"]),
-                               float(segments[index]["offset"]))
+                               float(segments[index]["offset"]), span=90.0)
             if found is None:
                 continue
             cut_time, level_before, level_after = found
@@ -1808,6 +1809,164 @@ def refine_cuts_by_waveform(ref, tgt, plan, zones=None, window: float = 30.0,
     out["jumps"] = jumps
     out["waveform_cuts"] = True
     return out, notes
+
+
+def track_offset(ref, tgt, step: float = 1.0, window: float = 6.0,
+                 search: float = 1.5, hop_ms: float = 25.0):
+    """
+    Follow the offset of the target second by second, against the reference.
+
+    This is the whole-waveform experiment: instead of measuring a block every
+    eighty seconds and fitting a model through those blocks, the offset is tracked
+    continuously.  Each step takes a few seconds of the reference and looks for it
+    within a small window around the current offset, so the track can only move
+    where the audio really moves - and where it cannot find itself (re-recorded
+    dialogue) it holds the last value instead of inventing one.
+
+    Returns [(t, offset_ms, support)] at `step` resolution.
+    """
+    hop = int(SCAN_SR * hop_ms / 1000.0)
+    frames = min(len(ref), len(tgt)) // hop
+    if frames < 50:
+        return []
+    a = np.asarray(ref[:frames * hop], dtype=np.float32).reshape(frames, hop)
+    b = np.asarray(tgt[:frames * hop], dtype=np.float32).reshape(frames, hop)
+    level_a = np.einsum("ij,ij->i", a, a)
+    level_b = np.einsum("ij,ij->i", b, b)
+    win = max(8, int(window * 1000.0 / hop_ms))
+    lag_max = max(2, int(search * 1000.0 / hop_ms))
+    step_frames = max(1, int(step * 1000.0 / hop_ms))
+    prior = 0
+    out = []
+    for start in range(0, frames - win - lag_max, step_frames):
+        segment = level_a[start:start + win]
+        segment = segment - segment.mean()
+        norm = float(np.linalg.norm(segment))
+        if norm < 1e-6:
+            out.append((start * hop_ms / 1000.0, prior * hop_ms, 0.0))
+            continue
+        best_lag, best_score = prior, -1.0
+        for lag in range(prior - lag_max, prior + lag_max + 1):
+            index = start + lag
+            if index < 0 or index + win > frames:
+                continue
+            candidate = level_b[index:index + win]
+            candidate = candidate - candidate.mean()
+            cnorm = float(np.linalg.norm(candidate))
+            if cnorm < 1e-6:
+                continue
+            score = float(np.dot(segment, candidate)) / (norm * cnorm)
+            if score > best_score:
+                best_lag, best_score = lag, score
+        support = max(0.0, min(1.0, best_score))
+        if support >= 0.35:
+            prior = best_lag
+        out.append((start * hop_ms / 1000.0, prior * hop_ms, support))
+    return out
+
+
+def plan_from_track(points, duration: float, tolerance: float = 120.0,
+                    min_run: float = 4.0, min_step: float = 200.0):
+    """
+    Turn the tracked offset into segments, exactly as the audio shows them.
+
+    A run of seconds that agree on one level is a segment; where the level changes
+    and stays changed, the film has an edit.  Nothing is smoothed: the segments are
+    the runs, so a cut is where the tracker stepped and nowhere else.
+    """
+    if not points:
+        return None
+    usable = [p for p in points if p[2] >= 0.35]
+    if len(usable) < 4:
+        return None
+    # a greedy tracker twitches: one second can slip by a second and come back.
+    # A median filter over fifteen seconds removes the twitch without moving a
+    # real step, which is the whole point of doing this on the whole waveform
+    window = 15
+    offsets = [p[1] for p in usable]
+    smoothed = []
+    for index, point in enumerate(usable):
+        low = max(0, index - window)
+        high = min(len(offsets), index + window + 1)
+        smoothed.append((point[0], float(np.median(offsets[low:high])), point[2]))
+    usable = smoothed
+    segments = []
+    current = [usable[0]]
+    for previous, point in zip(usable, usable[1:]):
+        if abs(point[1] - current[-1][1]) <= tolerance:
+            current.append(point)
+            continue
+        # a step only counts when it is still there a few seconds later
+        later = [p for p in usable if point[0] <= p[0] <= point[0] + min_run]
+        if later and abs(float(np.median([p[1] for p in later]))
+                         - float(np.median([p[1] for p in current]))) >= min_step:
+            segments.append(current)
+            current = [point]
+        else:
+            current.append(point)
+    segments.append(current)
+    segments = [list(run) for run in segments]
+    if not segments:
+        return None
+
+    def level_of(run):
+        return float(np.median([point[1] for point in run]))
+
+    def length_of(run):
+        # seconds of audio actually measured, not the span: the tracker skips the
+        # seconds it could not follow, so a 19-sample run may span 40 seconds
+        return float(len(run))
+
+    # A run shorter than twenty-five seconds is the tracker blinking, not an edit.
+    # It is absorbed by the neighbour whose level is closer, so a blip in the
+    # middle of one level does not open a segment of its own.
+    changed = True
+    while changed and len(segments) > 1:
+        changed = False
+        for index, run in enumerate(segments):
+            if length_of(run) >= 25.0:
+                continue
+            level = level_of(run)
+            left = segments[index - 1] if index > 0 else None
+            right = segments[index + 1] if index + 1 < len(segments) else None
+            left_gap = abs(level_of(left) - level) if left else 1e9
+            right_gap = abs(level_of(right) - level) if right else 1e9
+            if left is not None and left_gap <= right_gap:
+                left.extend(run)
+            elif right is not None:
+                right[:0] = run
+            else:
+                break
+            segments.pop(index)
+            changed = True
+            break
+
+    # neighbours that end up on the same level are one segment
+    final = []
+    for run in segments:
+        if final and abs(level_of(run) - level_of(final[-1])) < 200.0:
+            final[-1].extend(run)
+        else:
+            final.append(list(run))
+    segments = final
+    if not segments:
+        return None
+    out = []
+    for index, run in enumerate(segments):
+        level = float(np.median([p[1] for p in run]))
+        start = 0.0 if index == 0 else run[0][0]
+        end = float(duration) if index == len(segments) - 1 else segments[index + 1][0][0]
+        out.append({"t_start": round(start, 2), "t_end": round(end, 2),
+                    "offset": round(level, 2), "slope": 0.0, "atempo": 1.0,
+                    "n": len(run), "rms": round(float(np.std(
+                        [p[1] - level for p in run])), 2)})
+    jumps = []
+    for previous, current_segment in zip(out, out[1:]):
+        delta = float(current_segment["offset"]) - float(previous["offset"])
+        jumps.append({"t": current_segment["t_start"], "delta": round(delta, 2),
+                      "mode": "pad" if delta < 0 else "skip"})
+    return {"segments": out, "jumps": jumps, "duration": float(duration),
+            "reliable": len(usable), "points": len(points), "exact": True}
 
 
 def plan_lines(plan):
@@ -2646,6 +2805,10 @@ class MainWindow(FluentWindow):
         self.edit_cores.setValidator(QIntValidator(1, max(1, os.cpu_count() or 1), self))
         cl.addWidget(StrongBodyLabel("Cores"))
         cl.addWidget(self.edit_cores)
+        self.chk_blocks = CheckBox("Blocks only")
+        self.chk_blocks.setToolTip("Force the block scan instead of following the "
+                                   "whole waveform")
+        cl.addWidget(self.chk_blocks)
         self.chk_single = CheckBox("Single line")
         self.chk_single.setToolTip("One offset and one drift for the whole film - "
                                    "no jumps at all")
@@ -3054,6 +3217,30 @@ class MainWindow(FluentWindow):
             env_b = envelope(tgt)
             mode = {0: "auto", 1: "envelope", 2: "waveform"}.get(
                 self.combo_mode.currentIndex(), "auto")
+            if not self.chk_blocks.isChecked():
+                self.ui_queue.put(("status", "Following the waveform…"))
+                tracked = track_offset(ref, tgt)
+                track_plan = plan_from_track(tracked, duration)
+                if track_plan is not None:
+                    track_plan, cut_notes = refine_cuts_by_waveform(ref, tgt, track_plan)
+                    for note in cut_notes:
+                        self.ui_queue.put(("log", note))
+                    self.ui_queue.put(("log", (
+                        f"Whole-waveform track: {len(tracked)} seconds followed, "
+                        f"{len(track_plan['segments'])} segment(s).")))
+                    for line in plan_lines(track_plan):
+                        self.ui_queue.put(("log", line))
+                    self.ui_queue.put(("points", [
+                        {"t": t, "offset": offset, "support": support,
+                         "contrast": 0.0, "mode": "track", "window": 1.0,
+                         "reliable": support >= 0.35}
+                        for t, offset, support in tracked]))
+                    self.ui_queue.put(("plan", track_plan))
+                    self.ui_queue.put(("status", "Done"))
+                    self.ui_queue.put(("done", None))
+                    return
+                self.ui_queue.put(("log", "The waveform track found no stable level "
+                                          "- using the block scan."))
             points = scan(env_a, env_b, block=block, window=window, duration=duration,
                           mode=mode,
                           progress=lambda done, total: self.ui_queue.put(

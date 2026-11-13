@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.2.0
+
+- **a fit that explains nothing is no longer presented as a model.**
+  `check_model_is_real()` refuses to call it one when the line is more than 1.5 s
+  off the blocks, when fewer than 20 % of the blocks agree with it, or when the
+  offsets themselves span more than 20 s. Instead of
+  `offset -11948.8 ms, drift +3.031 ms/s, atempo 1.003031` the panel says what is
+  actually true: these files do not look like the same film, or the intro differs
+  so much that nothing lines up. The export button is disabled and `export_plan()`
+  refuses, so nothing wrong can be written out
+- **the lag search follows the running time.** When the two files differ in length
+  by more than the 90 s search window, every block now searches the difference plus
+  a minute, and the log says so - a very different intro can push the match minutes
+  away from where the narrow search looks
+- measured on the pair the user had open: `Nobody` (2021) against `Nikt 2` (2025)
+  is two different films, and the scan now says exactly that instead of inventing
+  -11948.8 ms. The correct pair - `Nobody 2` against `Nikt 2` - gives one segment,
+  -310 ms, RMS 3 ms, 66 of 67 blocks
+
 ## 4.1.2
 
 - **proper dashes in titles and suggested names.** `pretty_title()` turns ` - `

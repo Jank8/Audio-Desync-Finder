@@ -124,7 +124,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 APP_NAME = "Audio Desync Finder"
-APP_VERSION = "4.1.2"
+APP_VERSION = "4.2.0"
 REPO_URL = "https://github.com/Jank8/Audio-Desync-Finder"
 
 # ---- engine -----------------------------------------------------------------
@@ -1987,10 +1987,48 @@ def plan_lines(plan):
     return lines
 
 
+def check_model_is_real(points, plan):
+    """
+    Refuse to call a fit a model when it explains nothing.
+
+    Two different films, or an intro that is nothing like the reference, make every
+    block correlate against noise: the offsets scatter over tens of seconds and the
+    line has an RMS of a minute, but it still comes out looking like a result -
+    "-11948 ms, drift +3.031 ms/s, atempo 1.003031" reads like a measurement even
+    though it is garbage.  The fit is checked against what the blocks actually say.
+    """
+    segments = plan.get("segments") or []
+    if not segments:
+        return plan
+    known = [point for point in points if float(point.get("support") or 0.0) >= 0.35]
+    total = max(1, len(points))
+    reliable = [point for point in points if point.get("reliable")]
+    share = len(reliable) / total
+    worst = max(float(segment["rms"]) for segment in segments)
+    spread = 0.0
+    if known:
+        offsets = sorted(float(point["offset"]) for point in known)
+        spread = offsets[int(0.9 * (len(offsets) - 1))] - offsets[int(0.1 * (len(offsets) - 1))]
+    problems = []
+    if worst > 1500.0:
+        problems.append(f"the line is {worst:.0f} ms off the blocks")
+    if share < 0.2:
+        problems.append(f"only {100 * share:.0f} % of the blocks agree with it")
+    if spread > 20000.0:
+        problems.append(f"the offsets themselves span {spread / 1000:.0f} s")
+    plan["unreliable"] = bool(problems)
+    plan["unreliable_reason"] = "; ".join(problems)
+    return plan
+
+
 def quality_text(plan) -> str:
     segments = plan.get("segments") or []
     if not segments:
         return "No usable model."
+    if plan.get("unreliable"):
+        return ("No model: " + str(plan.get("unreliable_reason") or "the blocks do "
+                "not agree") + " - these files do not look like the same film, or "
+                "the intro differs so much that nothing lines up.")
     worst = max(float(seg["rms"]) for seg in segments)
     if worst <= 25.0:
         verdict = "good - the music lines up smoothly"
@@ -2116,6 +2154,9 @@ def export_plan(plan, target_path, out_path, progress=None, should_stop=None):
     window sitting frozen: a three hour film takes minutes and there is no other
     way to tell a working export from a hung one.
     """
+    if plan.get("unreliable"):
+        raise ValueError("this is not a model - " +
+                         str(plan.get("unreliable_reason") or "the blocks do not agree"))
     segments = plan.get("segments") or []
     jumps = plan.get("jumps") or []
     if len(segments) > 1 and any(float(jump["delta"]) < 0 for jump in jumps):
@@ -2968,7 +3009,7 @@ class MainWindow(FluentWindow):
                 self.quality.setText(quality_text(payload))
                 self.mux.setText(mux_text(payload))
                 self._fill_table()
-                self.btn_export.setEnabled(bool(payload.get("segments")))
+                self.btn_export.setEnabled(bool(payload.get("segments")) and not payload.get("unreliable"))
                 self._draw()
             elif kind == "done":
                 self.btn_scan.setEnabled(True)
@@ -3206,6 +3247,8 @@ class MainWindow(FluentWindow):
                     "a coincidence over a +-90 s search: the offsets scatter over "
                     "tens of seconds, the model collapses to one line and the real "
                     "cuts disappear into the cloud. Use 40-80 s.")))
+            ref_dur = float(self.meta.get("ref_duration") or 0.0)
+            tgt_dur = float(self.meta.get("tgt_duration") or 0.0)
             hint = fps_slope(self.meta.get("ref_fps"), self.meta.get("tgt_fps"))
             fps_atempo = 1.0
             if hint:
@@ -3213,8 +3256,6 @@ class MainWindow(FluentWindow):
                 # running times agree with it.  A 30.000 fps flag on a 23.976
                 # film implies -200 ms/s, which would squeeze the target to 80 %
                 # of its length and destroy a pair that is actually in sync.
-                ref_dur = float(self.meta.get("ref_duration") or 0.0)
-                tgt_dur = float(self.meta.get("tgt_duration") or 0.0)
                 if ref_dur > 60.0 and tgt_dur > 60.0:
                     expected = 1.0 + hint / 1000.0
                     actual = ref_dur / tgt_dur
@@ -3265,7 +3306,15 @@ class MainWindow(FluentWindow):
                     return
                 self.ui_queue.put(("log", "The waveform track found no stable level "
                                           "- using the block scan."))
+            lag_search = float(LAG_SEARCH_S)
+            span = abs(duration - tgt_dur)
+            if span + 30.0 > lag_search:
+                lag_search = span + 60.0
+                self.ui_queue.put(("log", (
+                    f"The running times differ by {span:.0f} s, so every block "
+                    f"searches {lag_search:.0f} s instead of {LAG_SEARCH_S:.0f} s.")))
             points = scan(env_a, env_b, block=block, window=window, duration=duration,
+                          lag_search=lag_search,
                           mode=mode,
                           progress=lambda done, total: self.ui_queue.put(
                               ("progress", (50.0 + 45.0 * done / max(total, 1),
@@ -3285,6 +3334,7 @@ class MainWindow(FluentWindow):
             else:
                 plan = fit_model(points, duration)
             plan["fps_atempo"] = fps_atempo
+            plan = check_model_is_real(points, plan)
             holes = target_holes(ref, tgt)
             if holes and plan.get("jumps"):
                 moved = []
